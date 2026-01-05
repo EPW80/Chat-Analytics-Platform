@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -33,6 +34,11 @@ type Hub interface {
 	Broadcast([]byte)
 }
 
+// MessageRepository interface for message persistence
+type MessageRepository interface {
+	SaveMessage(ctx context.Context, msg *message.Message) error
+}
+
 // Client represents a WebSocket client connection
 type Client struct {
 	hub Hub
@@ -48,6 +54,9 @@ type Client struct {
 	username string
 	userID   string
 
+	// Optional message storage (nil-safe)
+	storage MessageRepository
+
 	// Logger
 	logger *slog.Logger
 }
@@ -61,8 +70,14 @@ func New(hub Hub, conn *websocket.Conn, userID, username string, logger *slog.Lo
 		id:       generateID(),
 		username: username,
 		userID:   userID,
+		storage:  nil, // Can be set later with SetStorage
 		logger:   logger,
 	}
+}
+
+// SetStorage sets the message repository for this client (optional)
+func (c *Client) SetStorage(storage MessageRepository) {
+	c.storage = storage
 }
 
 // readPump pumps messages from the WebSocket connection to the hub
@@ -113,6 +128,22 @@ func (c *Client) readPump() {
 				slog.String("clientID", c.id),
 				slog.String("error", err.Error()))
 			continue
+		}
+
+		// Non-blocking persistence (if storage is configured)
+		if c.storage != nil {
+			go func(msgCopy *message.Message) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				if err := c.storage.SaveMessage(ctx, msgCopy); err != nil {
+					c.logger.Error("failed to persist message",
+						slog.String("clientID", c.id),
+						slog.String("messageId", msgCopy.MessageID),
+						slog.String("error", err.Error()))
+					// Don't block message delivery on storage failure
+				}
+			}(msg)
 		}
 
 		// Convert back to JSON and broadcast

@@ -1,6 +1,8 @@
 package client
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -452,5 +454,216 @@ func TestClient_MetadataOverride(t *testing.T) {
 	}
 	if broadcastMsg.Username != "ActualName" {
 		t.Errorf("expected username 'ActualName', got '%s'", broadcastMsg.Username)
+	}
+}
+// mockStorage implements MessageRepository for testing
+type mockStorage struct {
+	mu       sync.Mutex
+	messages []*message.Message
+	errors   chan error
+}
+
+func newMockStorage() *mockStorage {
+	return &mockStorage{
+		messages: make([]*message.Message, 0),
+		errors:   make(chan error, 10),
+	}
+}
+
+func (m *mockStorage) SaveMessage(ctx context.Context, msg *message.Message) error {
+	select {
+	case err := <-m.errors:
+		return err
+	default:
+		m.mu.Lock()
+		m.messages = append(m.messages, msg)
+		m.mu.Unlock()
+		return nil
+	}
+}
+
+func (m *mockStorage) MessageCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.messages)
+}
+
+func (m *mockStorage) GetMessage(index int) *message.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if index < 0 || index >= len(m.messages) {
+		return nil
+	}
+	return m.messages[index]
+}
+
+func (m *mockStorage) SimulateError(err error) {
+	m.errors <- err
+}
+
+func TestClient_StoragePersistence(t *testing.T) {
+	hub := newMockHub()
+	storage := newMockStorage()
+	logger := newTestLogger()
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade error: %v", err)
+		}
+		defer conn.Close()
+
+		client := New(hub, conn, "user123", "TestUser", logger)
+		client.SetStorage(storage)
+		client.Start()
+
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	defer ws.Close()
+
+	// Send a message
+	msg := &message.Message{
+		Type:     message.TypeChat,
+		UserID:   "user123",
+		Username: "TestUser",
+		Content:  "Hello Storage",
+	}
+	data, _ := msg.ToJSON()
+	err = ws.WriteMessage(websocket.TextMessage, data)
+	if err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+
+	// Wait for async storage operation
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify message was persisted
+	if storage.MessageCount() != 1 {
+		t.Fatalf("expected 1 message in storage, got %d", storage.MessageCount())
+	}
+
+	storedMsg := storage.GetMessage(0)
+	if storedMsg == nil {
+		t.Fatal("stored message is nil")
+	}
+
+	if storedMsg.Content != "Hello Storage" {
+		t.Errorf("expected content 'Hello Storage', got '%s'", storedMsg.Content)
+	}
+	if storedMsg.UserID != "user123" {
+		t.Errorf("expected userID 'user123', got '%s'", storedMsg.UserID)
+	}
+}
+
+func TestClient_StorageNilSafe(t *testing.T) {
+	hub := newMockHub()
+	logger := newTestLogger()
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade error: %v", err)
+		}
+		defer conn.Close()
+
+		// Client created without storage (nil)
+		client := New(hub, conn, "user123", "TestUser", logger)
+		client.Start()
+
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	defer ws.Close()
+
+	// Send a message
+	msg := &message.Message{
+		Type:     message.TypeChat,
+		UserID:   "user123",
+		Username: "TestUser",
+		Content:  "Hello",
+	}
+	data, _ := msg.ToJSON()
+	err = ws.WriteMessage(websocket.TextMessage, data)
+	if err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify message was still broadcast (nil storage doesn't break flow)
+	if hub.BroadcastCount() != 1 {
+		t.Fatalf("expected 1 broadcast, got %d", hub.BroadcastCount())
+	}
+}
+
+func TestClient_StorageErrorHandling(t *testing.T) {
+	hub := newMockHub()
+	storage := newMockStorage()
+	logger := newTestLogger()
+
+	// Simulate storage error
+	storage.SimulateError(errors.New("storage unavailable"))
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade error: %v", err)
+		}
+		defer conn.Close()
+
+		client := New(hub, conn, "user123", "TestUser", logger)
+		client.SetStorage(storage)
+		client.Start()
+
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	defer ws.Close()
+
+	// Send a message
+	msg := &message.Message{
+		Type:     message.TypeChat,
+		UserID:   "user123",
+		Username: "TestUser",
+		Content:  "Test Error Handling",
+	}
+	data, _ := msg.ToJSON()
+	err = ws.WriteMessage(websocket.TextMessage, data)
+	if err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify message was still broadcast despite storage error
+	if hub.BroadcastCount() != 1 {
+		t.Fatalf("expected 1 broadcast despite storage error, got %d", hub.BroadcastCount())
+	}
+
+	// Verify storage attempted to save (and failed)
+	if storage.MessageCount() != 0 {
+		t.Errorf("expected 0 messages in storage due to error, got %d", storage.MessageCount())
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/epw80/chat-analytics-platform/pkg/client"
+	"github.com/epw80/chat-analytics-platform/pkg/config"
 	"github.com/epw80/chat-analytics-platform/pkg/hub"
 	"github.com/gorilla/websocket"
 )
@@ -82,16 +83,29 @@ func (s *Server) setupRoutes() *http.ServeMux {
 }
 
 func main() {
-	// Setup logger
+	// Load configuration
+	cfg := config.Load()
+
+	// Setup logger with configured level
+	logLevel := slog.LevelInfo
+	switch cfg.LogLevel {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	}))
 
-	// Get port from environment
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	logger.Info("loaded configuration",
+		slog.String("port", cfg.Port),
+		slog.String("dynamodb_endpoint", cfg.DynamoDBEndpoint),
+		slog.String("dynamodb_region", cfg.DynamoDBRegion),
+		slog.String("log_level", cfg.LogLevel))
 
 	// Create server
 	srv := NewServer(logger)
@@ -101,7 +115,7 @@ func main() {
 
 	// Setup HTTP server
 	httpServer := &http.Server{
-		Addr:         ":" + port,
+		Addr:         ":" + cfg.Port,
 		Handler:      srv.setupRoutes(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -110,7 +124,7 @@ func main() {
 
 	// Start HTTP server in goroutine
 	go func() {
-		logger.Info("starting server", slog.String("port", port))
+		logger.Info("starting server", slog.String("port", cfg.Port))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server error", slog.String("error", err.Error()))
 			os.Exit(1)

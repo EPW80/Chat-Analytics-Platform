@@ -18,11 +18,13 @@ const (
 
 // Message represents a WebSocket message
 type Message struct {
-	Type      Type      `json:"type"`
-	UserID    string    `json:"userId"`
-	Username  string    `json:"username"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
+	MessageID string    `json:"messageId" dynamodbav:"MessageID"`
+	RoomID    string    `json:"roomId" dynamodbav:"RoomID"`
+	Type      Type      `json:"type" dynamodbav:"Type"`
+	UserID    string    `json:"userId" dynamodbav:"UserID"`
+	Username  string    `json:"username" dynamodbav:"Username"`
+	Content   string    `json:"content" dynamodbav:"Content"`
+	Timestamp time.Time `json:"timestamp" dynamodbav:"Timestamp"`
 }
 
 // Validation constants

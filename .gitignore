@@ -5,6 +5,7 @@ backend/*.test
 backend/*.out
 backend/coverage.*
 backend/chat-server
+backend/server
 
 # Environment variables
 .env
@@ -26,6 +27,8 @@ logs/
 # Temporary files
 tmp/
 temp/
+TEST_RESULTS.md
 
 # Claude Code
 claude.md
+node_modules/
