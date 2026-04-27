@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash ./scripts/init-tables.sh)",
+      "Bash(timeout 3 wscat -c \"ws://localhost:8080/ws?userId=testUser1&username=Alice\" --execute '{\"type\":\"chat\",\"content\":\"hello phase 2A\"}')",
+      "Bash(bash ./scripts/check-dynamodb.sh)",
+      "Bash(AWS_ACCESS_KEY_ID=dummy AWS_SECRET_ACCESS_KEY=dummy aws dynamodb scan --table-name chat-messages --endpoint-url http://localhost:8000 --region us-east-1 --output text)",
+      "Bash(python3 -c ' *)",
+      "Bash(go build *)",
+      "Bash(go run *)",
+      "Bash(go test *)",
+      "Bash(npm create *)",
+      "Bash(npx tailwindcss *)",
+      "Bash(npx tsc *)",
+      "Bash(npm uninstall *)"
+    ]
+  }
+}

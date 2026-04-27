@@ -10,9 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/epw80/chat-analytics-platform/pkg/analytics"
 	"github.com/epw80/chat-analytics-platform/pkg/client"
 	"github.com/epw80/chat-analytics-platform/pkg/config"
 	"github.com/epw80/chat-analytics-platform/pkg/hub"
+	"github.com/epw80/chat-analytics-platform/pkg/storage"
 	"github.com/gorilla/websocket"
 )
 
@@ -27,14 +29,21 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	hub    *hub.Hub
-	logger *slog.Logger
+	hub       *hub.Hub
+	storage   *storage.DynamoDBRepository
+	analytics *analytics.Tracker
+	logger    *slog.Logger
 }
 
-func NewServer(logger *slog.Logger) *Server {
+func NewServer(logger *slog.Logger, repo *storage.DynamoDBRepository) *Server {
+	tracker := analytics.New()
+	h := hub.New(logger)
+	h.SetAnalytics(tracker)
 	return &Server{
-		hub:    hub.New(logger),
-		logger: logger,
+		hub:       h,
+		storage:   repo,
+		analytics: tracker,
+		logger:    logger,
 	}
 }
 
@@ -66,6 +75,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Create and register client
 	c := client.New(s.hub, conn, userID, username, s.logger)
+	if s.storage != nil {
+		c.SetStorage(s.storage)
+	}
+	c.SetAnalytics(s.analytics)
 	s.hub.Register(c)
 	c.Start()
 
@@ -75,11 +88,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		slog.String("clientID", c.ID()))
 }
 
-func (s *Server) setupRoutes() *http.ServeMux {
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) setupRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ws", s.handleWebSocket)
-	return mux
+	mux.HandleFunc("/api/analytics", analytics.NewHandler(s.analytics))
+	return corsMiddleware(mux)
 }
 
 func main() {
@@ -107,8 +134,21 @@ func main() {
 		slog.String("dynamodb_region", cfg.DynamoDBRegion),
 		slog.String("log_level", cfg.LogLevel))
 
+	// Initialize DynamoDB storage (graceful degradation if unavailable)
+	var repo *storage.DynamoDBRepository
+	if cfg.DynamoDBEndpoint != "" || cfg.DynamoDBRegion != "" {
+		dbCtx, dbCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer dbCancel()
+		var err error
+		repo, err = storage.NewDynamoDBRepository(dbCtx, cfg, logger)
+		if err != nil {
+			logger.Warn("DynamoDB unavailable, running without persistence",
+				slog.String("error", err.Error()))
+		}
+	}
+
 	// Create server
-	srv := NewServer(logger)
+	srv := NewServer(logger, repo)
 
 	// Start hub
 	go srv.hub.Run()

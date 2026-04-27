@@ -11,7 +11,7 @@ echo "Waiting for DynamoDB at $host:$port..."
 
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
-    if curl -sf "http://$host:$port/" > /dev/null 2>&1; then
+    if curl -s "http://$host:$port/" > /dev/null 2>&1; then
         echo "DynamoDB is ready!"
         exit 0
     fi

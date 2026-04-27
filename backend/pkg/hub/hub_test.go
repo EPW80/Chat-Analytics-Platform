@@ -34,6 +34,10 @@ func (m *mockClient) ID() string {
 	return m.id
 }
 
+func (m *mockClient) Username() string {
+	return "testuser"
+}
+
 func (m *mockClient) MessageCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

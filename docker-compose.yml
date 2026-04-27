@@ -6,9 +6,7 @@ services:
     container_name: chat-analytics-dynamodb
     ports:
       - "8000:8000"
-    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
-    volumes:
-      - dynamodb-data:/data
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
     networks:
       - chat-network
 
@@ -37,9 +35,20 @@ services:
       retries: 3
     restart: unless-stopped
 
-volumes:
-  dynamodb-data:
-    driver: local
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_WS_URL: ws://localhost:8080/ws
+        VITE_API_URL: http://localhost:8080
+    container_name: chat-analytics-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - chat-network
 
 networks:
   chat-network:

@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/epw80/chat-analytics-platform/pkg/analytics"
 	"github.com/epw80/chat-analytics-platform/pkg/message"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -57,6 +59,13 @@ type Client struct {
 	// Optional message storage (nil-safe)
 	storage MessageRepository
 
+	// Optional analytics tracker (nil-safe)
+	analytics *analytics.Tracker
+
+	// Configurable timing (defaults to package constants)
+	pongWait   time.Duration
+	pingPeriod time.Duration
+
 	// Logger
 	logger *slog.Logger
 }
@@ -64,20 +73,33 @@ type Client struct {
 // New creates a new Client instance
 func New(hub Hub, conn *websocket.Conn, userID, username string, logger *slog.Logger) *Client {
 	return &Client{
-		hub:      hub,
-		conn:     conn,
-		send:     make(chan []byte, sendBufferSize),
-		id:       generateID(),
-		username: username,
-		userID:   userID,
-		storage:  nil, // Can be set later with SetStorage
-		logger:   logger,
+		hub:        hub,
+		conn:       conn,
+		send:       make(chan []byte, sendBufferSize),
+		id:         generateID(),
+		username:   username,
+		userID:     userID,
+		storage:    nil, // Can be set later with SetStorage
+		pongWait:   pongWait,
+		pingPeriod: pingPeriod,
+		logger:     logger,
 	}
 }
 
 // SetStorage sets the message repository for this client (optional)
 func (c *Client) SetStorage(storage MessageRepository) {
 	c.storage = storage
+}
+
+// SetAnalytics attaches an analytics tracker to this client (optional)
+func (c *Client) SetAnalytics(t *analytics.Tracker) {
+	c.analytics = t
+}
+
+// Username returns the display name of the connected user.
+// Implements the hub.Client interface.
+func (c *Client) Username() string {
+	return c.username
 }
 
 // readPump pumps messages from the WebSocket connection to the hub
@@ -92,9 +114,9 @@ func (c *Client) readPump() {
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadDeadline(time.Now().Add(c.pongWait))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		c.conn.SetReadDeadline(time.Now().Add(c.pongWait))
 		return nil
 	})
 
@@ -118,9 +140,20 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// Set client metadata
+		// Set client metadata (server overrides any client-supplied values)
 		msg.UserID = c.userID
 		msg.Username = c.username
+
+		// Enrich with server-side fields the client doesn't set
+		if msg.MessageID == "" {
+			msg.MessageID = uuid.New().String()
+		}
+		if msg.RoomID == "" {
+			msg.RoomID = "global"
+		}
+		if msg.Timestamp.IsZero() {
+			msg.Timestamp = time.Now().UTC()
+		}
 
 		// Validate
 		if err := msg.Validate(); err != nil {
@@ -146,6 +179,10 @@ func (c *Client) readPump() {
 			}(msg)
 		}
 
+		if c.analytics != nil {
+			c.analytics.TrackMessage(msg)
+		}
+
 		// Convert back to JSON and broadcast
 		jsonData, err := msg.ToJSON()
 		if err != nil {
@@ -165,7 +202,7 @@ func (c *Client) readPump() {
 // application ensures that there is at most one writer to a connection by
 // executing all writes from this goroutine.
 func (c *Client) writePump() {
-	ticker := time.NewTicker(pingPeriod)
+	ticker := time.NewTicker(c.pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()

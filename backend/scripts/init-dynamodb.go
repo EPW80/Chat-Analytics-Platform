@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -86,7 +87,7 @@ func main() {
 		waiter := dynamodb.NewTableNotExistsWaiter(client)
 		err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 			TableName: aws.String(schema.TableName),
-		}, 60)
+		}, 60*time.Second)
 		if err != nil {
 			log.Fatalf("Failed waiting for table deletion: %v", err)
 		}
@@ -186,7 +187,7 @@ func main() {
 	waiter := dynamodb.NewTableExistsWaiter(client)
 	err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(schema.TableName),
-	}, 60)
+	}, 60*time.Second)
 	if err != nil {
 		log.Fatalf("Failed waiting for table creation: %v", err)
 	}

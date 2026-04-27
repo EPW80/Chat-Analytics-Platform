@@ -258,6 +258,10 @@ func TestClient_PingPong(t *testing.T) {
 	hub := newMockHub()
 	logger := newTestLogger()
 
+	// Use short durations for test speed
+	testPongWait := 5 * time.Second
+	testPingPeriod := 1 * time.Second
+
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -267,10 +271,12 @@ func TestClient_PingPong(t *testing.T) {
 		defer conn.Close()
 
 		client := New(hub, conn, "user123", "alice", logger)
+		client.pongWait = testPongWait
+		client.pingPeriod = testPingPeriod
 		client.Start()
 
 		// Keep connection alive for multiple ping cycles
-		time.Sleep(pingPeriod * 3)
+		time.Sleep(testPingPeriod * 4)
 	}))
 	defer server.Close()
 
@@ -302,7 +308,7 @@ func TestClient_PingPong(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(pingPeriod * 3)
+	time.Sleep(testPingPeriod * 4)
 
 	// Should have received at least 2 pings
 	if pingReceived < 2 {
@@ -456,6 +462,7 @@ func TestClient_MetadataOverride(t *testing.T) {
 		t.Errorf("expected username 'ActualName', got '%s'", broadcastMsg.Username)
 	}
 }
+
 // mockStorage implements MessageRepository for testing
 type mockStorage struct {
 	mu       sync.Mutex

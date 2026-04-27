@@ -3,6 +3,9 @@ package hub
 import (
 	"log/slog"
 	"sync"
+	"time"
+
+	"github.com/epw80/chat-analytics-platform/pkg/analytics"
 )
 
 // Client represents a connected WebSocket client
@@ -11,6 +14,7 @@ type Client interface {
 	Send([]byte)
 	Close()
 	ID() string
+	Username() string
 }
 
 // Hub maintains active clients and broadcasts messages
@@ -35,6 +39,14 @@ type Hub struct {
 
 	// Shutdown signal
 	done chan struct{}
+
+	// Optional analytics tracker (nil-safe)
+	analytics *analytics.Tracker
+}
+
+// SetAnalytics attaches an analytics tracker to the hub (optional).
+func (h *Hub) SetAnalytics(t *analytics.Tracker) {
+	h.analytics = t
 }
 
 // New creates a new Hub instance
@@ -61,6 +73,10 @@ func (h *Hub) Run() {
 			h.clients[client] = true
 			h.mu.Unlock()
 
+			if h.analytics != nil {
+				h.analytics.TrackUserJoin(client.ID(), client.Username())
+			}
+
 			count := h.ClientCount()
 			h.logger.Info("client registered",
 				slog.String("clientID", client.ID()),
@@ -74,12 +90,17 @@ func (h *Hub) Run() {
 			}
 			h.mu.Unlock()
 
+			if h.analytics != nil {
+				h.analytics.TrackUserLeave(client.ID())
+			}
+
 			count := h.ClientCount()
 			h.logger.Info("client unregistered",
 				slog.String("clientID", client.ID()),
 				slog.Int("totalClients", count))
 
 		case message := <-h.broadcast:
+			start := time.Now()
 			h.mu.RLock()
 			for client := range h.clients {
 				// Non-blocking send
@@ -87,6 +108,9 @@ func (h *Hub) Run() {
 				client.Send(message)
 			}
 			h.mu.RUnlock()
+			if h.analytics != nil {
+				h.analytics.TrackBroadcastLatency(time.Since(start))
+			}
 
 		case <-h.done:
 			h.logger.Info("hub shutting down")

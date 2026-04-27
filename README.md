@@ -52,6 +52,7 @@ The platform currently consists of:
 ## Features
 
 ### Current (Phase 1 + 2A)
+
 - Real-time bidirectional messaging
 - WebSocket-based communication
 - Hub-and-Spoke connection management
@@ -67,11 +68,13 @@ The platform currently consists of:
 - **AWS SDK v2 integration** - Phase 2A ✅
 
 ### In Progress (Phase 2A)
+
 - AWS deployment preparation (ECS, CloudFormation)
 - Production Dockerfile
 - Integration and load tests
 
 ### Planned (Phase 2B+)
+
 - User analytics dashboard
 - Active user tracking
 - Message rate analytics
@@ -85,6 +88,7 @@ The platform currently consists of:
 ### Option 1: Docker Compose (Recommended)
 
 **Prerequisites:**
+
 - Docker and Docker Compose
 - Git
 
@@ -111,6 +115,7 @@ docker-compose down
 ```
 
 **Services:**
+
 - Backend: `http://localhost:8080`
 - DynamoDB Local: `http://localhost:8000`
 - WebSocket: `ws://localhost:8080/ws`
@@ -118,6 +123,7 @@ docker-compose down
 ### Option 2: Local Go Development
 
 **Prerequisites:**
+
 - Go 1.23 or higher
 - Git
 
@@ -141,18 +147,22 @@ The server will start on port 8080 by default.
 ### Testing the Server
 
 #### Health Check
+
 ```bash
 curl http://localhost:8080/health
 # Response: {"status":"ok","clients":0}
 ```
 
 #### WebSocket Connection
+
 Install wscat:
+
 ```bash
 npm install -g wscat
 ```
 
 Connect and send messages:
+
 ```bash
 # Terminal 1
 wscat -c "ws://localhost:8080/ws?userId=alice&username=Alice"
@@ -201,9 +211,11 @@ RealTimeChatAnalyticsPlatform/
 ### Endpoints
 
 #### GET /health
+
 Health check endpoint that returns server status and connected client count.
 
 **Response:**
+
 ```json
 {
   "status": "ok",
@@ -212,13 +224,16 @@ Health check endpoint that returns server status and connected client count.
 ```
 
 #### WS /ws
+
 WebSocket endpoint for real-time chat connections.
 
 **Query Parameters:**
+
 - `userId` (optional): User identifier (defaults to "anonymous")
 - `username` (optional): Display name (defaults to "Anonymous")
 
 **Example:**
+
 ```
 ws://localhost:8080/ws?userId=user123&username=Alice
 ```
@@ -240,6 +255,7 @@ All messages follow this JSON structure:
 ```
 
 **Message Fields:**
+
 - `messageId`: Unique UUID (auto-generated, Phase 2A)
 - `roomId`: Room identifier (defaults to "global", Phase 2A)
 - `type`: Message type (see below)
@@ -249,12 +265,14 @@ All messages follow this JSON structure:
 - `timestamp`: ISO 8601 timestamp (UTC)
 
 **Message Types:**
+
 - `chat`: User chat message
 - `system`: System announcement
 - `join`: User joined notification
 - `leave`: User left notification
 
 **Validation Rules:**
+
 - Username: Required, max 50 characters
 - Content (for chat messages): Required, max 1000 characters
 - Timestamp: Automatically set to UTC
@@ -264,6 +282,7 @@ All messages follow this JSON structure:
 ## Development
 
 ### Running Tests
+
 ```bash
 cd backend
 
@@ -278,6 +297,7 @@ go test -cover ./...
 ```
 
 ### Building
+
 ```bash
 cd backend
 go build -o chat-server cmd/server/main.go
@@ -287,16 +307,19 @@ go build -o chat-server cmd/server/main.go
 ### Environment Variables
 
 **Server Configuration:**
+
 - `PORT`: Server port (default: 8080)
 - `LOG_LEVEL`: Logging level (debug, info, warn, error; default: info)
 
 **DynamoDB Configuration (Phase 2A):**
+
 - `DYNAMODB_ENDPOINT`: DynamoDB endpoint URL (e.g., http://localhost:8000 for local)
 - `DYNAMODB_REGION`: AWS region (default: us-east-1)
 - `AWS_ACCESS_KEY_ID`: AWS access key (use "dummy" for local DynamoDB)
 - `AWS_SECRET_ACCESS_KEY`: AWS secret key (use "dummy" for local DynamoDB)
 
 **Example (.env.example):**
+
 ```bash
 PORT=8080
 LOG_LEVEL=info
@@ -316,6 +339,7 @@ AWS_SECRET_ACCESS_KEY=dummy
 ## Technology Stack
 
 ### Backend
+
 - **Language**: Go 1.23+
 - **WebSocket**: gorilla/websocket v1.5.3
 - **Storage**: AWS SDK v2 for DynamoDB (Phase 2A)
@@ -325,6 +349,7 @@ AWS_SECRET_ACCESS_KEY=dummy
 - **UUID Generation**: google/uuid v1.6.0
 
 ### Infrastructure (Phase 2A)
+
 - **Containerization**: Docker and Docker Compose
 - **Database**: DynamoDB Local (development), AWS DynamoDB (production)
 - **Networking**: Docker bridge networks
@@ -332,6 +357,7 @@ AWS_SECRET_ACCESS_KEY=dummy
 ## Roadmap
 
 ### Phase 1 (Complete) ✅
+
 - [x] WebSocket server with Hub-and-Spoke architecture
 - [x] Real-time message broadcasting
 - [x] Comprehensive test coverage
@@ -339,6 +365,7 @@ AWS_SECRET_ACCESS_KEY=dummy
 - [x] Graceful shutdown
 
 ### Phase 2A (In Progress - 60% Complete) 🚧
+
 - [x] Message persistence (DynamoDB)
 - [x] Docker containerization
 - [x] DynamoDB Local integration
@@ -350,18 +377,21 @@ AWS_SECRET_ACCESS_KEY=dummy
 - [ ] Integration and load tests
 
 ### Phase 2B (Planned)
+
 - [ ] Real-time analytics backend
 - [ ] In-memory metrics tracking
 - [ ] Analytics API endpoint
 - [ ] Performance metrics collection
 
 ### Phase 2C (Planned)
+
 - [ ] Frontend chat interface (React)
 - [ ] Analytics dashboard
 - [ ] User list component
 - [ ] Message history visualization
 
 ### Phase 3+ (Future)
+
 - [ ] User authentication & authorization
 - [ ] Private messaging
 - [ ] Rate limiting

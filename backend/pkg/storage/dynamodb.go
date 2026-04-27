@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -59,6 +60,11 @@ func NewDynamoDBRepository(ctx context.Context, cfg *appconfig.Config, logger *s
 	repo := &DynamoDBRepository{
 		client: client,
 		logger: logger,
+	}
+
+	// Create table if it doesn't exist
+	if err := repo.EnsureTable(ctx); err != nil {
+		return nil, fmt.Errorf("failed to ensure DynamoDB table: %w", err)
 	}
 
 	// Verify connection with health check
@@ -213,18 +219,77 @@ func (r *DynamoDBRepository) GetMessagesByUser(ctx context.Context, userID strin
 	return messages, nil
 }
 
-// HealthCheck verifies DynamoDB is accessible
-func (r *DynamoDBRepository) HealthCheck(ctx context.Context) error {
-	// Try to describe the table
-	input := &dynamodb.DescribeTableInput{
-		TableName: aws.String(TableName),
+// EnsureTable creates the DynamoDB table if it does not already exist
+func (r *DynamoDBRepository) EnsureTable(ctx context.Context) error {
+	schema := GetTableSchema()
+
+	descCtx, descCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer descCancel()
+
+	_, err := r.client.DescribeTable(descCtx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(schema.TableName),
+	})
+	if err == nil {
+		r.logger.Info("DynamoDB table already exists", slog.String("table", schema.TableName))
+		return nil
 	}
 
-	_, err := r.client.DescribeTable(ctx, input)
+	r.logger.Info("creating DynamoDB table", slog.String("table", schema.TableName))
+
+	createCtx, createCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer createCancel()
+
+	_, err = r.client.CreateTable(createCtx, &dynamodb.CreateTableInput{
+		TableName: aws.String(schema.TableName),
+		AttributeDefinitions: []types.AttributeDefinition{
+			{AttributeName: aws.String(schema.PartitionKey), AttributeType: types.ScalarAttributeTypeS},
+			{AttributeName: aws.String(schema.SortKey), AttributeType: types.ScalarAttributeTypeS},
+			{AttributeName: aws.String(schema.GSI1PartitionKey), AttributeType: types.ScalarAttributeTypeS},
+			{AttributeName: aws.String(schema.GSI1SortKey), AttributeType: types.ScalarAttributeTypeS},
+		},
+		KeySchema: []types.KeySchemaElement{
+			{AttributeName: aws.String(schema.PartitionKey), KeyType: types.KeyTypeHash},
+			{AttributeName: aws.String(schema.SortKey), KeyType: types.KeyTypeRange},
+		},
+		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+			{
+				IndexName: aws.String(schema.GSI1Name),
+				KeySchema: []types.KeySchemaElement{
+					{AttributeName: aws.String(schema.GSI1PartitionKey), KeyType: types.KeyTypeHash},
+					{AttributeName: aws.String(schema.GSI1SortKey), KeyType: types.KeyTypeRange},
+				},
+				Projection:            &types.Projection{ProjectionType: types.ProjectionTypeAll},
+				ProvisionedThroughput: &types.ProvisionedThroughput{ReadCapacityUnits: aws.Int64(5), WriteCapacityUnits: aws.Int64(5)},
+			},
+			{
+				IndexName: aws.String(schema.GSI2Name),
+				KeySchema: []types.KeySchemaElement{
+					{AttributeName: aws.String(schema.GSI2PartitionKey), KeyType: types.KeyTypeHash},
+					{AttributeName: aws.String(schema.GSI2SortKey), KeyType: types.KeyTypeRange},
+				},
+				Projection:            &types.Projection{ProjectionType: types.ProjectionTypeAll},
+				ProvisionedThroughput: &types.ProvisionedThroughput{ReadCapacityUnits: aws.Int64(5), WriteCapacityUnits: aws.Int64(5)},
+			},
+		},
+		BillingMode:           types.BillingModeProvisioned,
+		ProvisionedThroughput: &types.ProvisionedThroughput{ReadCapacityUnits: aws.Int64(5), WriteCapacityUnits: aws.Int64(5)},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create table: %w", err)
+	}
+
+	r.logger.Info("DynamoDB table created successfully", slog.String("table", schema.TableName))
+	return nil
+}
+
+// HealthCheck verifies DynamoDB is accessible
+func (r *DynamoDBRepository) HealthCheck(ctx context.Context) error {
+	_, err := r.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(TableName),
+	})
 	if err != nil {
 		return fmt.Errorf("DynamoDB health check failed: %w", err)
 	}
-
 	return nil
 }
 
