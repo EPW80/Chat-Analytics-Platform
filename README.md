@@ -1,247 +1,158 @@
 # Real-Time Chat Analytics Platform
 
-A scalable real-time messaging platform with analytics capabilities, built with WebSocket technology and Hub-and-Spoke architecture.
+A real-time, Twitch-style chat platform with a live analytics dashboard. A Go WebSocket backend (hub-and-spoke) handles rooms, message persistence, and metrics; a React + TypeScript frontend renders the chat and analytics in a polished dark UI.
 
 ## Overview
 
-This platform provides real-time chat functionality with comprehensive analytics tracking. The system is designed to handle concurrent connections efficiently while collecting and analyzing message patterns, user engagement, and system performance metrics.
+The platform provides real-time room-based chat with live analytics: message throughput, active users vs. connections, peak connections, and broadcast-latency percentiles. Messages are persisted to DynamoDB through a bounded worker pool and exposed via a history API, while high-frequency metrics are tracked in memory with atomic counters and a sliding window.
 
 ## Architecture
 
-The platform currently consists of:
-
-- **Backend**: Go-based WebSocket server with Hub-and-Spoke architecture
-- **Storage**: DynamoDB for message persistence
-- **Analytics** (planned): Real-time message analytics and user behavior tracking
-- **Frontend** (planned): Web-based chat interface
-
-### Current Implementation (Phase 2A)
-
 ```
-┌─────────────────────────────────────────┐
-│          WebSocket Clients              │
-│  (Browser, Mobile, Desktop)             │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│         Hub (Central Manager)           │
-│  • Connection management                │
-│  • Message broadcasting                 │
-│  • Channel-based communication          │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│         Client Connections              │
-│  • Read/Write goroutines                │
-│  • Message validation                   │
-│  • Ping/Pong keepalive                  │
-│  • Non-blocking persistence             │
-└──────────┬──────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────┐
-│      DynamoDB (Message Storage)         │
-│  • Message history                      │
-│  • User-based queries (GSI)             │
-│  • Room-based queries (GSI)             │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│   Frontend — React + Vite + TypeScript        │
+│   • Virtualized chat (react-window)           │
+│   • Analytics dashboard (live polling)        │
+│   • useWebSocket: exponential-backoff reconnect│
+└───────────────┬──────────────────────────────┘
+        wss /ws │  https /api/*
+                ▼
+┌──────────────────────────────────────────────┐
+│   Hub (central manager)                        │
+│   • Clients grouped by room (map per RoomID)   │
+│   • Per-room broadcast fan-out                 │
+│   • Channel-based register/unregister/broadcast│
+└───────┬───────────────────────────┬───────────┘
+        │                           │
+        ▼                           ▼
+┌───────────────────┐     ┌──────────────────────┐
+│ Client connections│     │ Analytics tracker     │
+│ • read/write pumps│     │ • atomic counters     │
+│ • validation      │     │ • 15-min sliding window│
+│ • rate limiting   │     │ • latency percentiles │
+│ • ping/pong       │     │ • GET /api/analytics  │
+└───────┬───────────┘     └──────────────────────┘
+        │ enqueue (non-blocking)
+        ▼
+┌──────────────────────────────────────────────┐
+│   Persistence worker pool                      │
+│   • bounded, batching (BatchWriteItem)         │
+│   • drops-when-full, drains on shutdown        │
+└───────────────┬──────────────────────────────┘
+                ▼
+┌──────────────────────────────────────────────┐
+│   DynamoDB (chat-messages)                     │
+│   • PK RoomID / SK MessageID                   │
+│   • GSI: UserID-Timestamp, RoomID-Timestamp    │
+└──────────────────────────────────────────────┘
 ```
 
 ## Features
 
-### Current (Phase 1 + 2A)
-
-- Real-time bidirectional messaging
-- WebSocket-based communication
-- Hub-and-Spoke connection management
-- Type-safe message validation
-- Automatic connection cleanup
-- Graceful shutdown
-- Health check endpoint
-- Comprehensive test coverage
-- **Message persistence** (DynamoDB) - Phase 2A ✅
-- **Non-blocking async storage** - Phase 2A ✅
-- **Docker Compose setup** - Phase 2A ✅
-- **DynamoDB Local integration** - Phase 2A ✅
-- **AWS SDK v2 integration** - Phase 2A ✅
-
-### In Progress (Phase 2A)
-
-- AWS deployment preparation (ECS, CloudFormation)
-- Production Dockerfile
-- Integration and load tests
-
-### Planned (Phase 2B+)
-
-- User analytics dashboard
-- Active user tracking
-- Message rate analytics
-- Performance metrics
-- Private messaging
-- Authentication & authorization
-- Frontend chat interface (React)
+- **Room-based chat** — clients join a room (`?room=`, default `global`); broadcasts are scoped per room.
+- **Live analytics** — total messages, active connections vs. unique users, peak connections, messages/minute (15-min window), and p50/p95/p99 broadcast latency, served at `/api/analytics`.
+- **Message history API** — recent room history and per-user history, with join-time hydration so a connecting client replays recent messages.
+- **Bounded persistence pool** — messages are enqueued non-blocking and written to DynamoDB in batches by a fixed worker pool, keeping the broadcast path off storage latency.
+- **Per-connection rate limiting** — token-bucket throttle on inbound messages.
+- **Token auth** — optional HMAC-signed bearer tokens (enabled when `AUTH_SECRET` is set); falls back to a `userId` query param for local development.
+- **Configurable CORS / WebSocket origin allowlist.**
+- **Graceful degradation** — runs without DynamoDB (chat + live analytics still work, no persistence).
+- **Polished React frontend** — refined dark theme, design tokens, reusable UI primitives, avatars, virtualized message list, and a live metrics dashboard.
+- **Comprehensive tests** — every backend package has a `_test.go`; the suite runs clean under `-race`.
 
 ## Quick Start
 
-### Option 1: Docker Compose (Recommended)
+### Full stack via Docker Compose
 
-**Prerequisites:**
-
-- Docker and Docker Compose
-- Git
+**Prerequisites:** Docker + Docker Compose, Git.
 
 ```bash
-# Clone the repository
 git clone https://github.com/EPW80/Chat-Analytics-Platform.git
 cd Chat-Analytics-Platform
 
-# Start services (Backend + DynamoDB Local)
+# Start DynamoDB Local + backend + frontend
 docker-compose up -d
 
-# Check health
-curl http://localhost:8080/health
-# Response: {"status":"ok","clients":0}
-
-# Initialize DynamoDB tables (optional - for persistence)
+# Create DynamoDB tables (enables persistence + history)
 ./scripts/init-tables.sh
 
-# View logs
-docker-compose logs -f backend
-
-# Stop services
-docker-compose down
-```
-
-**Services:**
-
-- Backend: `http://localhost:8080`
-- DynamoDB Local: `http://localhost:8000`
-- WebSocket: `ws://localhost:8080/ws`
-
-### Option 2: Local Go Development
-
-**Prerequisites:**
-
-- Go 1.23 or higher
-- Git
-
-```bash
-# Clone the repository
-git clone https://github.com/EPW80/Chat-Analytics-Platform.git
-cd Chat-Analytics-Platform
-
-# Navigate to backend
-cd backend
-
-# Install dependencies
-go mod download
-
-# Run the server
-go run cmd/server/main.go
-```
-
-The server will start on port 8080 by default.
-
-### Testing the Server
-
-#### Health Check
-
-```bash
+# Health check
 curl http://localhost:8080/health
-# Response: {"status":"ok","clients":0}
+# {"status":"ok","clients":0,"storage":"ok"}
 ```
 
-#### WebSocket Connection
+Services:
+- Frontend: `http://localhost:3000`
+- Backend: `http://localhost:8080` (WebSocket at `ws://localhost:8080/ws`)
+- DynamoDB Local: `http://localhost:8000`
 
-Install wscat:
+`./start.sh` orchestrates the same flow (build, wait for health, init tables).
+
+### Backend only (local Go)
+
+**Prerequisites:** Go 1.23+.
 
 ```bash
-npm install -g wscat
+cd backend
+go mod download
+go run ./cmd/server
+# Runs on :8080. Without DynamoDB reachable it logs a warning and
+# continues with storage disabled (chat + analytics still work).
 ```
 
-Connect and send messages:
+### Frontend only (Vite dev server)
+
+**Prerequisites:** Node 20+.
 
 ```bash
-# Terminal 1
-wscat -c "ws://localhost:8080/ws?userId=alice&username=Alice"
-
-# Terminal 2
-wscat -c "ws://localhost:8080/ws?userId=bob&username=Bob"
-
-# Send a message (in either terminal)
-{"type":"chat","content":"Hello everyone!"}
+cd frontend
+npm install
+npm run dev          # http://localhost:5173
 ```
 
-## Project Structure
+The frontend reads `VITE_WS_URL` and `VITE_API_URL` (defaults point at `localhost:8080`). For a production build these are baked in at build time.
 
-```
-RealTimeChatAnalyticsPlatform/
-├── backend/                    # Go WebSocket server
-│   ├── cmd/
-│   │   └── server/            # Main server entry point
-│   ├── pkg/
-│   │   ├── client/            # WebSocket client handler
-│   │   ├── config/            # Environment configuration
-│   │   ├── hub/               # Connection manager
-│   │   ├── message/           # Message types & validation
-│   │   └── storage/           # DynamoDB persistence (Phase 2A)
-│   │       ├── interface.go   # Repository interface
-│   │       ├── dynamodb.go    # DynamoDB implementation
-│   │       └── schema.go      # Table schema
-│   ├── scripts/
-│   │   └── init-dynamodb.go   # Table initialization
-│   ├── Dockerfile             # Development container
-│   ├── .dockerignore
-│   ├── go.mod
-│   └── README.md              # Backend documentation
-├── scripts/
-│   ├── wait-for-dynamodb.sh   # Health check script
-│   └── init-tables.sh         # Table setup wrapper
-├── docker-compose.yml         # Local development stack
-├── .env.example               # Environment template
-├── .gitignore
-├── claude.md                  # Implementation plan
-└── README.md                  # This file
+## API
+
+### `GET /health`
+Liveness + readiness. `storage` is `ok`, `unavailable`, or `disabled`.
+```json
+{ "status": "ok", "clients": 5, "storage": "ok" }
 ```
 
-## API Documentation
+### `WS /ws`
+WebSocket chat endpoint.
 
-### Endpoints
+| Query param | Default | Notes |
+|-------------|---------|-------|
+| `userId`    | `anonymous` | ignored when token auth is enabled |
+| `username`  | `Anonymous` | display name |
+| `room`      | `global` | room to join |
+| `token`     | — | required when `AUTH_SECRET` is set (or `Authorization: Bearer`) |
 
-#### GET /health
+```
+ws://localhost:8080/ws?userId=user123&username=Alice&room=global
+```
 
-Health check endpoint that returns server status and connected client count.
-
-**Response:**
-
+### `GET /api/analytics`
+Point-in-time metrics snapshot.
 ```json
 {
-  "status": "ok",
-  "clients": 5
+  "totalMessages": 1280,
+  "activeConnections": 4,
+  "activeUsers": 3,
+  "peakConnections": 17,
+  "messagesPerMinute": [/* last 15 minutes */],
+  "latencyP50Ms": 0.4, "latencyP95Ms": 1.2, "latencyP99Ms": 2.1,
+  "activeUserDetails": [{ "clientId": "...", "userId": "...", "username": "Alice", "joinedAt": "..." }],
+  "uptimeSeconds": 3600, "serverStartTime": "..."
 }
 ```
 
-#### WS /ws
+### `GET /api/rooms/{id}/messages` · `GET /api/users/{id}/messages`
+Recent message history for a room or a user. Optional `?limit=` (default 50, max 200). Returns `503` when storage is unavailable.
 
-WebSocket endpoint for real-time chat connections.
-
-**Query Parameters:**
-
-- `userId` (optional): User identifier (defaults to "anonymous")
-- `username` (optional): Display name (defaults to "Anonymous")
-
-**Example:**
-
-```
-ws://localhost:8080/ws?userId=user123&username=Alice
-```
-
-### Message Format
-
-All messages follow this JSON structure:
-
+### Message format
 ```json
 {
   "messageId": "550e8400-e29b-41d4-a716-446655440000",
@@ -250,174 +161,88 @@ All messages follow this JSON structure:
   "userId": "user123",
   "username": "Alice",
   "content": "Hello world",
-  "timestamp": "2025-12-30T10:30:00Z"
+  "timestamp": "2026-06-16T10:30:00Z"
 }
 ```
+**Types:** `chat`, `system`, `join`, `leave`. **Validation:** username required (≤50 chars); chat content required (≤1000 chars); `messageId`/`timestamp`/`roomId` are server-authoritative.
 
-**Message Fields:**
+## Project Structure
 
-- `messageId`: Unique UUID (auto-generated, Phase 2A)
-- `roomId`: Room identifier (defaults to "global", Phase 2A)
-- `type`: Message type (see below)
-- `userId`: User identifier
-- `username`: Display name
-- `content`: Message text
-- `timestamp`: ISO 8601 timestamp (UTC)
+```
+RealTimeChatAnalyticsPlatform/
+├── backend/                     # Go WebSocket server
+│   ├── cmd/server/              # Entry point, HTTP routes, wiring
+│   └── pkg/
+│       ├── analytics/           # Atomic counters, sliding window, /api/analytics
+│       ├── auth/                # HMAC-signed token authenticator
+│       ├── client/              # Per-connection read/write pumps
+│       ├── config/              # Environment configuration
+│       ├── hub/                 # Room-based connection manager
+│       ├── message/             # Message types + validation
+│       ├── persist/             # Bounded batching persistence worker pool
+│       ├── ratelimit/           # Per-connection token bucket
+│       └── storage/             # DynamoDB repository (interface-based)
+├── frontend/                    # React + Vite + TypeScript + Tailwind
+│   └── src/
+│       ├── components/          # Chat, message list, input, user list, dashboard
+│       │   └── ui/              # Reusable primitives (Button, Card, Badge, …)
+│       ├── hooks/               # useWebSocket, useAnalytics, useElementSize
+│       ├── lib/                 # cn, userColor helpers
+│       └── types/               # Shared TypeScript types
+├── scripts/                     # init-tables.sh, wait-for-dynamodb.sh, …
+├── docker-compose.yml           # Local stack (DynamoDB + backend + frontend)
+├── start.sh                     # One-command local startup
+└── docs/BUILD_PLAN.md           # Full architecture & phase plan
+```
 
-**Message Types:**
+## Configuration
 
-- `chat`: User chat message
-- `system`: System announcement
-- `join`: User joined notification
-- `leave`: User left notification
+Backend (environment variables):
 
-**Validation Rules:**
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | `8080` | HTTP/WS port |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `DYNAMODB_ENDPOINT` | `http://localhost:8000` | local endpoint; empty/AWS for production |
+| `DYNAMODB_REGION` | `us-east-1` | DynamoDB region |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `dummy` | local creds; use an IAM role in production |
+| `ALLOWED_ORIGINS` | `*` | CORS + WebSocket origin allowlist (comma-separated) |
+| `AUTH_SECRET` | — | HMAC secret; empty disables token auth |
+| `RATE_LIMIT_PER_SEC` / `RATE_LIMIT_BURST` | `5` / `10` | per-connection token bucket (`<=0` disables) |
+| `PERSIST_WORKERS` / `PERSIST_BATCH_SIZE` / `PERSIST_QUEUE_SIZE` | `4` / `25` / `1024` | persistence pool tuning |
 
-- Username: Required, max 50 characters
-- Content (for chat messages): Required, max 1000 characters
-- Timestamp: Automatically set to UTC
-- MessageID: Auto-generated UUID v4 if not provided
-- RoomID: Defaults to "global" if not provided
+Frontend: `VITE_WS_URL` (WebSocket URL) and `VITE_API_URL` (REST base), baked in at build time.
 
 ## Development
 
-### Running Tests
-
 ```bash
 cd backend
+go test ./... -race      # all packages, race detector
+go test ./... -cover     # coverage
+go build ./cmd/server    # build the binary
 
-# Run all tests
-go test ./...
-
-# Run with race detection
-go test -race ./...
-
-# Test coverage
-go test -cover ./...
+cd ../frontend
+npm run build            # tsc type-check + vite build
+npm run lint             # eslint
 ```
 
-### Building
+> Note: `TestClient_PingPong` has a documented pre-existing race in the test harness — left as-is intentionally.
 
-```bash
-cd backend
-go build -o chat-server cmd/server/main.go
-./chat-server
-```
+## Deployment
 
-### Environment Variables
-
-**Server Configuration:**
-
-- `PORT`: Server port (default: 8080)
-- `LOG_LEVEL`: Logging level (debug, info, warn, error; default: info)
-
-**DynamoDB Configuration (Phase 2A):**
-
-- `DYNAMODB_ENDPOINT`: DynamoDB endpoint URL (e.g., http://localhost:8000 for local)
-- `DYNAMODB_REGION`: AWS region (default: us-east-1)
-- `AWS_ACCESS_KEY_ID`: AWS access key (use "dummy" for local DynamoDB)
-- `AWS_SECRET_ACCESS_KEY`: AWS secret key (use "dummy" for local DynamoDB)
-
-**Example (.env.example):**
-
-```bash
-PORT=8080
-LOG_LEVEL=info
-DYNAMODB_ENDPOINT=http://localhost:8000
-DYNAMODB_REGION=us-east-1
-AWS_ACCESS_KEY_ID=dummy
-AWS_SECRET_ACCESS_KEY=dummy
-```
-
-## Performance
-
-- **Capacity**: 100+ concurrent connections
-- **Latency**: <100ms message delivery (p95)
-- **Throughput**: Non-blocking broadcast to all clients
-- **Reliability**: Automatic connection cleanup, no goroutine leaks
+Production target: **AWS ECS Fargate** for the backend behind an ALB, **DynamoDB** (on-demand) for persistence, and the static frontend on **S3 + CloudFront**. The DynamoDB table and IAM policies are authored by hand. The backend uses the AWS default credential chain (task IAM role) when `DYNAMODB_ENDPOINT` is empty; `ALLOWED_ORIGINS` must list the public frontend origin and TLS (`wss`) is terminated at the edge.
 
 ## Technology Stack
 
-### Backend
+**Backend:** Go 1.23, gorilla/websocket, aws-sdk-go-v2 (DynamoDB), google/uuid, `slog` structured logging, goroutines + channels.
 
-- **Language**: Go 1.23+
-- **WebSocket**: gorilla/websocket v1.5.3
-- **Storage**: AWS SDK v2 for DynamoDB (Phase 2A)
-- **Configuration**: github.com/epw80/chat-analytics-platform/pkg/config
-- **Concurrency**: Goroutines and channels
-- **Logging**: slog (structured logging)
-- **UUID Generation**: google/uuid v1.6.0
+**Frontend:** React 18, Vite 5, TypeScript 5, Tailwind CSS 3, react-window (virtualization), lucide-react (icons), Inter (font).
 
-### Infrastructure (Phase 2A)
-
-- **Containerization**: Docker and Docker Compose
-- **Database**: DynamoDB Local (development), AWS DynamoDB (production)
-- **Networking**: Docker bridge networks
-
-## Roadmap
-
-### Phase 1 (Complete) ✅
-
-- [x] WebSocket server with Hub-and-Spoke architecture
-- [x] Real-time message broadcasting
-- [x] Comprehensive test coverage
-- [x] Health check endpoint
-- [x] Graceful shutdown
-
-### Phase 2A (In Progress - 60% Complete) 🚧
-
-- [x] Message persistence (DynamoDB)
-- [x] Docker containerization
-- [x] DynamoDB Local integration
-- [x] AWS SDK v2 integration
-- [x] Configuration management
-- [x] Non-blocking async storage
-- [ ] AWS deployment files (ECS, CloudFormation)
-- [ ] Production Dockerfile
-- [ ] Integration and load tests
-
-### Phase 2B (Planned)
-
-- [ ] Real-time analytics backend
-- [ ] In-memory metrics tracking
-- [ ] Analytics API endpoint
-- [ ] Performance metrics collection
-
-### Phase 2C (Planned)
-
-- [ ] Frontend chat interface (React)
-- [ ] Analytics dashboard
-- [ ] User list component
-- [ ] Message history visualization
-
-### Phase 3+ (Future)
-
-- [ ] User authentication & authorization
-- [ ] Private messaging
-- [ ] Rate limiting
-- [ ] Kubernetes deployment
-- [ ] Horizontal scaling with Redis pub/sub
-- [ ] CloudWatch integration
-- [ ] API Gateway + Lambda
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+**Infrastructure:** Docker + Docker Compose, DynamoDB Local (dev) / AWS DynamoDB (prod).
 
 ## Security Notes
 
-This is currently a development implementation. For production use:
-
-1. **Authentication**: Implement proper JWT/OAuth instead of query parameters
-2. **CORS**: Restrict allowed origins
-3. **Rate Limiting**: Add per-client message rate limits
-4. **Input Validation**: Add content filtering and sanitization
-5. **TLS**: Use WSS (WebSocket Secure) with proper certificates
-6. **Environment Variables**: Use secure secret management
-
-## Documentation
-
-For detailed backend documentation, see [backend/README.md](backend/README.md).
+Implemented: token (HMAC) auth, configurable CORS/origin allowlist, per-connection rate limiting, server-authoritative message fields. For production also ensure: TLS/`wss` at the edge, a strong `AUTH_SECRET` via a secrets manager, an IAM task role (no static keys), and a restrictive `ALLOWED_ORIGINS`.
 
 ## License
 
