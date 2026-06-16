@@ -1,6 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { MessagesSquare } from 'lucide-react';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import type { Message } from '../types/message';
+import { useElementSize } from '../hooks/useElementSize';
+import { initials, userColor } from '../lib/userColor';
 
 interface Props {
   messages: Message[];
@@ -15,32 +18,37 @@ function Row({ index, style, data }: ListChildComponentProps<Message[]>) {
   if (msg.type === 'system' || msg.type === 'join' || msg.type === 'leave') {
     return (
       <div style={style} className="flex items-center justify-center px-4">
-        <span className="text-xs text-gray-500 italic">{msg.content || `${msg.username} ${msg.type}ed`}</span>
+        <span className="rounded-full bg-surface-raised px-3 py-1 text-xs text-subtle">
+          {msg.content || `${msg.username} ${msg.type}ed`}
+        </span>
       </div>
     );
   }
 
   const color = userColor(msg.userId);
   return (
-    <div style={style} className="flex flex-col justify-center px-4 py-1 hover:bg-gray-800/40">
-      <div className="flex items-baseline gap-2">
-        <span className="text-sm font-semibold" style={{ color }}>{msg.username}</span>
-        <span className="text-xs text-gray-500">{time}</span>
+    <div style={style} className="flex items-start gap-3 px-4 py-1.5 transition-colors hover:bg-surface-raised">
+      <div
+        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-bg"
+        style={{ backgroundColor: color }}
+        aria-hidden
+      >
+        {initials(msg.username)}
       </div>
-      <p className="text-sm text-gray-200 break-words leading-snug">{msg.content}</p>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold" style={{ color }}>{msg.username}</span>
+          <span className="text-xs text-subtle">{time}</span>
+        </div>
+        <p className="break-words text-sm leading-snug text-text/90">{msg.content}</p>
+      </div>
     </div>
   );
 }
 
-function userColor(userId: string): string {
-  const colors = ['#60a5fa', '#34d399', '#f472b6', '#fb923c', '#a78bfa', '#38bdf8', '#4ade80'];
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) hash = (hash * 31 + userId.charCodeAt(i)) & 0xffffffff;
-  return colors[Math.abs(hash) % colors.length];
-}
-
 export function MessageList({ messages }: Props) {
   const listRef = useRef<FixedSizeList>(null);
+  const { ref, height } = useElementSize<HTMLDivElement>();
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -50,25 +58,28 @@ export function MessageList({ messages }: Props) {
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-        No messages yet. Say hello!
+      <div ref={ref} className="flex flex-1 flex-col items-center justify-center gap-3 text-subtle">
+        <MessagesSquare className="h-10 w-10 opacity-40" />
+        <p className="text-sm">No messages yet. Say hello!</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-hidden">
-      <FixedSizeList
-        ref={listRef}
-        height={600}
-        itemCount={messages.length}
-        itemSize={ROW_HEIGHT}
-        itemData={messages}
-        width="100%"
-        className="scrollbar-thin"
-      >
-        {Row}
-      </FixedSizeList>
+    <div ref={ref} className="flex-1 overflow-hidden">
+      {height > 0 && (
+        <FixedSizeList
+          ref={listRef}
+          height={height}
+          itemCount={messages.length}
+          itemSize={ROW_HEIGHT}
+          itemData={messages}
+          width="100%"
+          className="scrollbar-thin"
+        >
+          {Row}
+        </FixedSizeList>
+      )}
     </div>
   );
 }

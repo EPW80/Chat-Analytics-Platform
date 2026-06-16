@@ -1,3 +1,48 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --bg: 9 9 14; /* app background (near-black slate) */
+  --surface: 18 18 27; /* header, sidebar, input bar */
+  --surface-raised: 28 28 40; /* cards, inputs, message hover */
+  --border: 38 38 54;
+  --border-subtle: 30 30 44;
+  --text: 237 237 245;
+  --text-muted: 161 161 180;
+  --text-subtle: 113 113 134;
+  --accent: 129 90 240; /* violet-500-ish */
+  --accent-hover: 146 110 248;
+  --accent-fg: 255 255 255;
+  --success: 74 222 128;
+  --warning: 250 204 21;
+  --danger: 248 113 113;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+  }
+
+  /* real .scrollbar-thin (the class was referenced but previously a no-op) */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgb(var(--border));
+    border-radius: 9999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
