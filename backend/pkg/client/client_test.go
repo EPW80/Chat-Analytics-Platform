@@ -40,7 +40,7 @@ func (m *mockHub) Unregister(c any) {
 	}
 }
 
-func (m *mockHub) Broadcast(data []byte) {
+func (m *mockHub) Broadcast(roomID string, data []byte) {
 	m.mu.Lock()
 	m.broadcasts = append(m.broadcasts, data)
 	m.mu.Unlock()

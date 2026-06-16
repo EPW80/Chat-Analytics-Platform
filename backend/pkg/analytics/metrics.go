@@ -5,7 +5,8 @@ import "time"
 // Metrics is a point-in-time snapshot of analytics data.
 type Metrics struct {
 	TotalMessages     int64      `json:"totalMessages"`
-	ActiveUsers       int64      `json:"activeUsers"`
+	ActiveConnections int64      `json:"activeConnections"` // total open WebSocket connections
+	ActiveUsers       int64      `json:"activeUsers"`       // unique users (deduplicated across connections)
 	PeakConnections   int64      `json:"peakConnections"`
 	MessagesPerMinute []int64    `json:"messagesPerMinute"` // last 15 minutes, oldest first
 	LatencyP50Ms      float64    `json:"latencyP50Ms"`
@@ -16,8 +17,9 @@ type Metrics struct {
 	ServerStartTime   time.Time  `json:"serverStartTime"`
 }
 
-// UserInfo holds display info for a connected user.
+// UserInfo holds display info for a single connection.
 type UserInfo struct {
+	ClientID string    `json:"clientId"`
 	UserID   string    `json:"userId"`
 	Username string    `json:"username"`
 	JoinedAt time.Time `json:"joinedAt"`

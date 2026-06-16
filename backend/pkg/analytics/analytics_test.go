@@ -24,13 +24,16 @@ func TestTracker_TrackMessage(t *testing.T) {
 	}
 }
 
-func TestTracker_TrackUserJoin(t *testing.T) {
+func TestTracker_TrackConnect(t *testing.T) {
 	tr := New()
 
-	tr.TrackUserJoin("u1", "Alice")
-	tr.TrackUserJoin("u2", "Bob")
+	tr.TrackConnect("c1", "u1", "Alice")
+	tr.TrackConnect("c2", "u2", "Bob")
 
 	m := tr.GetMetrics()
+	if m.ActiveConnections != 2 {
+		t.Errorf("expected 2 active connections, got %d", m.ActiveConnections)
+	}
 	if m.ActiveUsers != 2 {
 		t.Errorf("expected 2 active users, got %d", m.ActiveUsers)
 	}
@@ -42,11 +45,36 @@ func TestTracker_TrackUserJoin(t *testing.T) {
 	}
 }
 
-func TestTracker_TrackUserLeave(t *testing.T) {
+// A single user with two connections (e.g. two tabs) counts as two
+// connections but one unique user, and survives one of them disconnecting.
+func TestTracker_MultipleConnectionsSameUser(t *testing.T) {
 	tr := New()
-	tr.TrackUserJoin("u1", "Alice")
-	tr.TrackUserJoin("u2", "Bob")
-	tr.TrackUserLeave("u1")
+	tr.TrackConnect("c1", "u1", "Alice")
+	tr.TrackConnect("c2", "u1", "Alice")
+
+	m := tr.GetMetrics()
+	if m.ActiveConnections != 2 {
+		t.Errorf("expected 2 active connections, got %d", m.ActiveConnections)
+	}
+	if m.ActiveUsers != 1 {
+		t.Errorf("expected 1 unique active user, got %d", m.ActiveUsers)
+	}
+
+	tr.TrackDisconnect("c1", "u1")
+	m = tr.GetMetrics()
+	if m.ActiveConnections != 1 {
+		t.Errorf("expected 1 active connection after one disconnect, got %d", m.ActiveConnections)
+	}
+	if m.ActiveUsers != 1 {
+		t.Errorf("expected user to remain active via second connection, got %d", m.ActiveUsers)
+	}
+}
+
+func TestTracker_TrackDisconnect(t *testing.T) {
+	tr := New()
+	tr.TrackConnect("c1", "u1", "Alice")
+	tr.TrackConnect("c2", "u2", "Bob")
+	tr.TrackDisconnect("c1", "u1")
 
 	m := tr.GetMetrics()
 	if m.ActiveUsers != 1 {
@@ -105,12 +133,13 @@ func TestTracker_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
+			clientID := "client" + string(rune('A'+id%26))
 			userID := "user" + string(rune('A'+id%26))
-			tr.TrackUserJoin(userID, userID)
+			tr.TrackConnect(clientID, userID, userID)
 			tr.TrackMessage(msg)
 			tr.TrackBroadcastLatency(time.Duration(id) * time.Microsecond)
 			tr.GetMetrics()
-			tr.TrackUserLeave(userID)
+			tr.TrackDisconnect(clientID, userID)
 		}(i)
 	}
 	wg.Wait()
@@ -123,7 +152,7 @@ func TestTracker_Concurrent(t *testing.T) {
 
 func TestHandler_JSON(t *testing.T) {
 	tr := New()
-	tr.TrackUserJoin("u1", "Alice")
+	tr.TrackConnect("c1", "u1", "Alice")
 	tr.TrackMessage(&message.Message{Type: message.TypeChat, Content: "test"})
 
 	h := NewHandler(tr)

@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -27,13 +26,16 @@ const (
 
 	// Buffer size for the send channel
 	sendBufferSize = 256
+
+	// Room a client joins when none is specified on connect
+	defaultRoomID = "global"
 )
 
 // Hub interface to avoid circular dependencies
 type Hub interface {
 	Register(any)
 	Unregister(any)
-	Broadcast([]byte)
+	Broadcast(roomID string, data []byte)
 }
 
 // MessageRepository interface for message persistence
@@ -55,6 +57,7 @@ type Client struct {
 	id       string
 	username string
 	userID   string
+	roomID   string
 
 	// Optional message storage (nil-safe)
 	storage MessageRepository
@@ -79,7 +82,8 @@ func New(hub Hub, conn *websocket.Conn, userID, username string, logger *slog.Lo
 		id:         generateID(),
 		username:   username,
 		userID:     userID,
-		storage:    nil, // Can be set later with SetStorage
+		roomID:     defaultRoomID, // Can be overridden with SetRoom
+		storage:    nil,           // Can be set later with SetStorage
 		pongWait:   pongWait,
 		pingPeriod: pingPeriod,
 		logger:     logger,
@@ -96,10 +100,31 @@ func (c *Client) SetAnalytics(t *analytics.Tracker) {
 	c.analytics = t
 }
 
+// SetRoom assigns the client to a chat room. Must be called before the client
+// is registered with the hub. An empty roomID leaves the default room in place.
+func (c *Client) SetRoom(roomID string) {
+	if roomID != "" {
+		c.roomID = roomID
+	}
+}
+
+// RoomID returns the room this connection belongs to.
+// Implements the hub.Client interface.
+func (c *Client) RoomID() string {
+	return c.roomID
+}
+
 // Username returns the display name of the connected user.
 // Implements the hub.Client interface.
 func (c *Client) Username() string {
 	return c.username
+}
+
+// UserID returns the authenticated user identifier for this connection.
+// Distinct from ID(), which identifies the individual connection.
+// Implements the hub.Client interface.
+func (c *Client) UserID() string {
+	return c.userID
 }
 
 // readPump pumps messages from the WebSocket connection to the hub
@@ -143,13 +168,11 @@ func (c *Client) readPump() {
 		// Set client metadata (server overrides any client-supplied values)
 		msg.UserID = c.userID
 		msg.Username = c.username
+		msg.RoomID = c.roomID
 
 		// Enrich with server-side fields the client doesn't set
 		if msg.MessageID == "" {
 			msg.MessageID = uuid.New().String()
-		}
-		if msg.RoomID == "" {
-			msg.RoomID = "global"
 		}
 		if msg.Timestamp.IsZero() {
 			msg.Timestamp = time.Now().UTC()
@@ -192,7 +215,7 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		c.hub.Broadcast(jsonData)
+		c.hub.Broadcast(c.roomID, jsonData)
 	}
 }
 
@@ -274,7 +297,9 @@ func (c *Client) ID() string {
 	return c.id
 }
 
-// generateID generates a unique client ID
+// generateID generates a unique client ID.
+// Uses a UUID to avoid the collision risk of timestamp-based IDs when
+// multiple connections are established within the same nanosecond.
 func generateID() string {
-	return fmt.Sprintf("client-%d", time.Now().UnixNano())
+	return "client-" + uuid.NewString()
 }

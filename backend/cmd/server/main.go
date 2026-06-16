@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -30,12 +30,12 @@ var upgrader = websocket.Upgrader{
 
 type Server struct {
 	hub       *hub.Hub
-	storage   *storage.DynamoDBRepository
+	storage   storage.MessageRepository
 	analytics *analytics.Tracker
 	logger    *slog.Logger
 }
 
-func NewServer(logger *slog.Logger, repo *storage.DynamoDBRepository) *Server {
+func NewServer(logger *slog.Logger, repo storage.MessageRepository) *Server {
 	tracker := analytics.New()
 	h := hub.New(logger)
 	h.SetAnalytics(tracker)
@@ -48,15 +48,37 @@ func NewServer(logger *slog.Logger, repo *storage.DynamoDBRepository) *Server {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Storage is an optional dependency; report its reachability so the
+	// endpoint can be used as a readiness probe rather than a bare liveness ping.
+	storageStatus := "disabled"
+	if s.storage != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := s.storage.HealthCheck(ctx); err != nil {
+			storageStatus = "unavailable"
+		} else {
+			storageStatus = "ok"
+		}
+	}
+
+	resp := map[string]any{
+		"status":  "ok",
+		"clients": s.hub.ClientCount(),
+		"storage": storageStatus,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok","clients":%d}`, s.hub.ClientCount())
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Error("failed to encode health response", slog.String("error", err.Error()))
+	}
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Extract user info from query params (in production, use proper auth)
 	userID := r.URL.Query().Get("userId")
 	username := r.URL.Query().Get("username")
+	room := r.URL.Query().Get("room")
 
 	if userID == "" {
 		userID = "anonymous"
@@ -79,12 +101,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		c.SetStorage(s.storage)
 	}
 	c.SetAnalytics(s.analytics)
+	c.SetRoom(room) // empty room falls back to the client's default
 	s.hub.Register(c)
 	c.Start()
 
 	s.logger.Info("new websocket connection",
 		slog.String("userID", userID),
 		slog.String("username", username),
+		slog.String("roomID", c.RoomID()),
 		slog.String("clientID", c.ID()))
 }
 
@@ -134,16 +158,20 @@ func main() {
 		slog.String("dynamodb_region", cfg.DynamoDBRegion),
 		slog.String("log_level", cfg.LogLevel))
 
-	// Initialize DynamoDB storage (graceful degradation if unavailable)
-	var repo *storage.DynamoDBRepository
+	// Initialize DynamoDB storage (graceful degradation if unavailable).
+	// repo is kept as the interface type and only assigned on success, so a
+	// failed init leaves it as a true nil interface (avoiding the typed-nil
+	// trap where a nil *DynamoDBRepository would still compare != nil).
+	var repo storage.MessageRepository
 	if cfg.DynamoDBEndpoint != "" || cfg.DynamoDBRegion != "" {
 		dbCtx, dbCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer dbCancel()
-		var err error
-		repo, err = storage.NewDynamoDBRepository(dbCtx, cfg, logger)
+		db, err := storage.NewDynamoDBRepository(dbCtx, cfg, logger)
 		if err != nil {
 			logger.Warn("DynamoDB unavailable, running without persistence",
 				slog.String("error", err.Error()))
+		} else {
+			repo = db
 		}
 	}
 
@@ -189,6 +217,13 @@ func main() {
 
 	// Shutdown hub
 	srv.hub.Shutdown()
+
+	// Release storage resources
+	if srv.storage != nil {
+		if err := srv.storage.Close(); err != nil {
+			logger.Error("error closing storage", slog.String("error", err.Error()))
+		}
+	}
 
 	logger.Info("server exited")
 }

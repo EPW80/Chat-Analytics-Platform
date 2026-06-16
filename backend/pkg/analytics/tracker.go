@@ -13,14 +13,20 @@ const maxLatencySamples = 1000
 
 // Tracker collects real-time analytics events using atomic counters and
 // in-memory structures. All methods are safe for concurrent use.
+//
+// Connections and users are tracked separately: a single user (userID) may
+// hold several concurrent connections (e.g. multiple browser tabs). The
+// connections map is keyed by the per-connection client ID, while userRefs
+// ref-counts active connections per user so a tab closing doesn't drop a user
+// who is still connected elsewhere.
 type Tracker struct {
 	totalMessages   atomic.Int64
-	activeUsers     atomic.Int64
 	peakConnections atomic.Int64
 
 	mu             sync.RWMutex
-	activeUserMap  map[string]UserInfo
-	latencySamples []time.Duration // ring buffer capped at maxLatencySamples
+	connections    map[string]UserInfo // keyed by clientID
+	userRefs       map[string]int      // userID -> active connection count
+	latencySamples []time.Duration     // ring buffer capped at maxLatencySamples
 	window         *slidingWindow
 	startTime      time.Time
 }
@@ -28,9 +34,10 @@ type Tracker struct {
 // New creates a ready-to-use Tracker.
 func New() *Tracker {
 	return &Tracker{
-		activeUserMap: make(map[string]UserInfo),
-		window:        newWindow(),
-		startTime:     time.Now(),
+		connections: make(map[string]UserInfo),
+		userRefs:    make(map[string]int),
+		window:      newWindow(),
+		startTime:   time.Now(),
 	}
 }
 
@@ -40,20 +47,20 @@ func (t *Tracker) TrackMessage(msg *message.Message) {
 	t.window.increment()
 }
 
-// TrackUserJoin records a new connection.
-func (t *Tracker) TrackUserJoin(userID, username string) {
+// TrackConnect records a new connection for the given client and user.
+func (t *Tracker) TrackConnect(clientID, userID, username string) {
 	t.mu.Lock()
-	t.activeUserMap[userID] = UserInfo{
+	t.connections[clientID] = UserInfo{
+		ClientID: clientID,
 		UserID:   userID,
 		Username: username,
 		JoinedAt: time.Now(),
 	}
-	count := int64(len(t.activeUserMap))
+	t.userRefs[userID]++
+	count := int64(len(t.connections))
 	t.mu.Unlock()
 
-	t.activeUsers.Store(count)
-
-	// Update peak if this is a new high.
+	// Update peak connections if this is a new high.
 	for {
 		peak := t.peakConnections.Load()
 		if count <= peak {
@@ -65,14 +72,16 @@ func (t *Tracker) TrackUserJoin(userID, username string) {
 	}
 }
 
-// TrackUserLeave records a disconnection.
-func (t *Tracker) TrackUserLeave(userID string) {
+// TrackDisconnect records a disconnection for the given client and user.
+func (t *Tracker) TrackDisconnect(clientID, userID string) {
 	t.mu.Lock()
-	delete(t.activeUserMap, userID)
-	count := int64(len(t.activeUserMap))
+	delete(t.connections, clientID)
+	if t.userRefs[userID] <= 1 {
+		delete(t.userRefs, userID)
+	} else {
+		t.userRefs[userID]--
+	}
 	t.mu.Unlock()
-
-	t.activeUsers.Store(count)
 }
 
 // TrackBroadcastLatency records how long a broadcast fan-out took.
@@ -89,16 +98,19 @@ func (t *Tracker) TrackBroadcastLatency(d time.Duration) {
 // GetMetrics returns a consistent point-in-time snapshot.
 func (t *Tracker) GetMetrics() Metrics {
 	t.mu.RLock()
-	users := make([]UserInfo, 0, len(t.activeUserMap))
-	for _, u := range t.activeUserMap {
+	users := make([]UserInfo, 0, len(t.connections))
+	for _, u := range t.connections {
 		users = append(users, u)
 	}
+	activeConnections := int64(len(t.connections))
+	activeUsers := int64(len(t.userRefs))
 	p50, p95, p99 := calcPercentiles(t.latencySamples)
 	t.mu.RUnlock()
 
 	return Metrics{
 		TotalMessages:     t.totalMessages.Load(),
-		ActiveUsers:       t.activeUsers.Load(),
+		ActiveConnections: activeConnections,
+		ActiveUsers:       activeUsers,
 		PeakConnections:   t.peakConnections.Load(),
 		MessagesPerMinute: t.window.snapshot(),
 		LatencyP50Ms:      p50,

@@ -11,6 +11,7 @@ import (
 // mockClient implements the Client interface for testing
 type mockClient struct {
 	id       string
+	room     string
 	messages [][]byte
 	closed   bool
 	mu       sync.Mutex
@@ -34,6 +35,14 @@ func (m *mockClient) ID() string {
 	return m.id
 }
 
+func (m *mockClient) UserID() string {
+	return "user-" + m.id
+}
+
+func (m *mockClient) RoomID() string {
+	return m.room
+}
+
 func (m *mockClient) Username() string {
 	return "testuser"
 }
@@ -53,9 +62,17 @@ func (m *mockClient) IsClosed() bool {
 func newMockClient(id string) *mockClient {
 	return &mockClient{
 		id:       id,
+		room:     "global",
 		messages: make([][]byte, 0),
 		closed:   false,
 	}
+}
+
+// newMockClientInRoom creates a mock client assigned to a specific room.
+func newMockClientInRoom(id, room string) *mockClient {
+	c := newMockClient(id)
+	c.room = room
+	return c
 }
 
 func newTestHub() *Hub {
@@ -112,7 +129,7 @@ func TestHub_Broadcast(t *testing.T) {
 
 	// Broadcast message
 	message := []byte("test message")
-	hub.Broadcast(message)
+	hub.Broadcast("global", message)
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify all clients received message
@@ -135,7 +152,7 @@ func TestHub_MultipleBroadcasts(t *testing.T) {
 	// Send multiple messages
 	messages := []string{"msg1", "msg2", "msg3"}
 	for _, msg := range messages {
-		hub.Broadcast([]byte(msg))
+		hub.Broadcast("global", []byte(msg))
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -176,7 +193,7 @@ func TestHub_ConcurrentOperations(t *testing.T) {
 	for i := 0; i < numMessages; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			hub.Broadcast([]byte("message"))
+			hub.Broadcast("global", []byte("message"))
 		}(i)
 	}
 	wg.Wait()
@@ -202,6 +219,40 @@ func TestHub_ConcurrentOperations(t *testing.T) {
 
 	if count := hub.ClientCount(); count != 0 {
 		t.Errorf("expected 0 clients, got %d", count)
+	}
+}
+
+func TestHub_BroadcastRoomIsolation(t *testing.T) {
+	hub := newTestHub()
+	go hub.Run()
+	defer hub.Shutdown()
+
+	roomA := newMockClientInRoom("a1", "roomA")
+	roomB := newMockClientInRoom("b1", "roomB")
+	hub.Register(roomA)
+	hub.Register(roomB)
+	time.Sleep(10 * time.Millisecond)
+
+	// Broadcast only to roomA
+	hub.Broadcast("roomA", []byte("hello roomA"))
+	time.Sleep(10 * time.Millisecond)
+
+	if count := roomA.MessageCount(); count != 1 {
+		t.Errorf("roomA client: expected 1 message, got %d", count)
+	}
+	if count := roomB.MessageCount(); count != 0 {
+		t.Errorf("roomB client: expected 0 messages (isolation), got %d", count)
+	}
+
+	if rooms := hub.RoomCount(); rooms != 2 {
+		t.Errorf("expected 2 active rooms, got %d", rooms)
+	}
+
+	// Unregistering the only member of a room should drop the room.
+	hub.Unregister(roomB)
+	time.Sleep(10 * time.Millisecond)
+	if rooms := hub.RoomCount(); rooms != 1 {
+		t.Errorf("expected 1 active room after unregister, got %d", rooms)
 	}
 }
 
@@ -295,7 +346,7 @@ func TestHub_RaceConditions(t *testing.T) {
 		// Broadcast
 		go func() {
 			defer wg.Done()
-			hub.Broadcast([]byte("test"))
+			hub.Broadcast("global", []byte("test"))
 		}()
 
 		// Read count
@@ -314,7 +365,7 @@ func TestHub_BroadcastToZeroClients(t *testing.T) {
 	defer hub.Shutdown()
 
 	// Broadcast to empty hub should not panic
-	hub.Broadcast([]byte("test message"))
+	hub.Broadcast("global", []byte("test message"))
 	time.Sleep(10 * time.Millisecond)
 
 	// Should complete without error
@@ -335,7 +386,7 @@ func BenchmarkHub_Broadcast(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		hub.Broadcast(message)
+		hub.Broadcast("global", message)
 	}
 }
 

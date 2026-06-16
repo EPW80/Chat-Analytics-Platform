@@ -14,16 +14,25 @@ type Client interface {
 	Send([]byte)
 	Close()
 	ID() string
+	UserID() string
 	Username() string
+	RoomID() string
 }
 
-// Hub maintains active clients and broadcasts messages
-type Hub struct {
-	// Registered clients
-	clients map[Client]bool
+// broadcastRequest carries a message destined for a single room.
+type broadcastRequest struct {
+	roomID string
+	data   []byte
+}
 
-	// Inbound messages from clients
-	broadcast chan []byte
+// Hub maintains active clients grouped by room and broadcasts each message
+// only to the clients in its originating room.
+type Hub struct {
+	// Registered clients grouped by room ID
+	rooms map[string]map[Client]bool
+
+	// Inbound messages from clients, tagged with their destination room
+	broadcast chan broadcastRequest
 
 	// Register requests from clients
 	register chan Client
@@ -31,7 +40,7 @@ type Hub struct {
 	// Unregister requests from clients
 	unregister chan Client
 
-	// Mutex for thread-safe client map access
+	// Mutex for thread-safe room map access
 	mu sync.RWMutex
 
 	// Logger
@@ -52,10 +61,10 @@ func (h *Hub) SetAnalytics(t *analytics.Tracker) {
 // New creates a new Hub instance
 func New(logger *slog.Logger) *Hub {
 	return &Hub{
-		broadcast:  make(chan []byte, 256),
+		rooms:      make(map[string]map[Client]bool),
+		broadcast:  make(chan broadcastRequest, 256),
 		register:   make(chan Client),
 		unregister: make(chan Client),
-		clients:    make(map[Client]bool),
 		logger:     logger,
 		done:       make(chan struct{}),
 	}
@@ -69,43 +78,60 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case client := <-h.register:
+			room := client.RoomID()
 			h.mu.Lock()
-			h.clients[client] = true
+			members := h.rooms[room]
+			if members == nil {
+				members = make(map[Client]bool)
+				h.rooms[room] = members
+			}
+			_, existed := members[client]
+			members[client] = true
 			h.mu.Unlock()
 
-			if h.analytics != nil {
-				h.analytics.TrackUserJoin(client.ID(), client.Username())
+			if !existed && h.analytics != nil {
+				h.analytics.TrackConnect(client.ID(), client.UserID(), client.Username())
 			}
 
 			count := h.ClientCount()
 			h.logger.Info("client registered",
 				slog.String("clientID", client.ID()),
+				slog.String("roomID", room),
 				slog.Int("totalClients", count))
 
 		case client := <-h.unregister:
+			room := client.RoomID()
 			h.mu.Lock()
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				client.Close()
+			removed := false
+			if members, ok := h.rooms[room]; ok {
+				if _, ok := members[client]; ok {
+					delete(members, client)
+					client.Close()
+					removed = true
+					if len(members) == 0 {
+						delete(h.rooms, room)
+					}
+				}
 			}
 			h.mu.Unlock()
 
-			if h.analytics != nil {
-				h.analytics.TrackUserLeave(client.ID())
+			if removed && h.analytics != nil {
+				h.analytics.TrackDisconnect(client.ID(), client.UserID())
 			}
 
 			count := h.ClientCount()
 			h.logger.Info("client unregistered",
 				slog.String("clientID", client.ID()),
+				slog.String("roomID", room),
 				slog.Int("totalClients", count))
 
-		case message := <-h.broadcast:
+		case req := <-h.broadcast:
 			start := time.Now()
 			h.mu.RLock()
-			for client := range h.clients {
+			for client := range h.rooms[req.roomID] {
 				// Non-blocking send
 				// If client's send buffer is full, skip it
-				client.Send(message)
+				client.Send(req.data)
 			}
 			h.mu.RUnlock()
 			if h.analytics != nil {
@@ -115,10 +141,12 @@ func (h *Hub) Run() {
 		case <-h.done:
 			h.logger.Info("hub shutting down")
 			h.mu.Lock()
-			for client := range h.clients {
-				client.Close()
+			for _, members := range h.rooms {
+				for client := range members {
+					client.Close()
+				}
 			}
-			h.clients = make(map[Client]bool)
+			h.rooms = make(map[string]map[Client]bool)
 			h.mu.Unlock()
 			return
 		}
@@ -139,16 +167,27 @@ func (h *Hub) Unregister(client any) {
 	}
 }
 
-// Broadcast sends a message to all clients
-func (h *Hub) Broadcast(message []byte) {
-	h.broadcast <- message
+// Broadcast sends a message to all clients in the given room.
+func (h *Hub) Broadcast(roomID string, message []byte) {
+	h.broadcast <- broadcastRequest{roomID: roomID, data: message}
 }
 
-// ClientCount returns the number of connected clients
+// ClientCount returns the total number of connected clients across all rooms.
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return len(h.clients)
+	total := 0
+	for _, members := range h.rooms {
+		total += len(members)
+	}
+	return total
+}
+
+// RoomCount returns the number of rooms with at least one connected client.
+func (h *Hub) RoomCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.rooms)
 }
 
 // Shutdown gracefully shuts down the hub
