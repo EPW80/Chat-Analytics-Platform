@@ -13,6 +13,10 @@ type MessageRepository interface {
 	// Returns an error if the operation fails.
 	SaveMessage(ctx context.Context, msg *message.Message) error
 
+	// BatchSaveMessages persists multiple messages in as few round-trips as
+	// the backend allows. Returns an error if any message could not be written.
+	BatchSaveMessages(ctx context.Context, msgs []*message.Message) error
+
 	// GetRecentMessages retrieves the most recent messages for a given room.
 	// Messages are returned in chronological order (oldest first).
 	// The limit parameter controls the maximum number of messages to return.

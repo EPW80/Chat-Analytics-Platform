@@ -122,6 +122,63 @@ func (r *DynamoDBRepository) SaveMessage(ctx context.Context, msg *message.Messa
 	return nil
 }
 
+// BatchSaveMessages persists multiple messages using DynamoDB BatchWriteItem,
+// chunking into the 25-item-per-call limit and retrying unprocessed items.
+func (r *DynamoDBRepository) BatchSaveMessages(ctx context.Context, msgs []*message.Message) error {
+	const maxBatch = 25 // DynamoDB BatchWriteItem hard limit
+
+	for start := 0; start < len(msgs); start += maxBatch {
+		end := start + maxBatch
+		if end > len(msgs) {
+			end = len(msgs)
+		}
+		if err := r.writeBatch(ctx, msgs[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeBatch writes a single chunk (<=25 items), retrying any items DynamoDB
+// reports as unprocessed (e.g. due to throttling).
+func (r *DynamoDBRepository) writeBatch(ctx context.Context, msgs []*message.Message) error {
+	requests := make([]types.WriteRequest, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg.MessageID == "" {
+			msg.MessageID = uuid.New().String()
+		}
+		if msg.RoomID == "" {
+			msg.RoomID = DefaultRoomID
+		}
+		item, err := attributevalue.MarshalMap(msg)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message %s: %w", msg.MessageID, err)
+		}
+		requests = append(requests, types.WriteRequest{
+			PutRequest: &types.PutRequest{Item: item},
+		})
+	}
+
+	unprocessed := map[string][]types.WriteRequest{TableName: requests}
+	for attempt := 0; attempt < 3; attempt++ {
+		out, err := r.client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+			RequestItems: unprocessed,
+		})
+		if err != nil {
+			r.logger.Error("batch write failed",
+				slog.Int("items", len(unprocessed[TableName])),
+				slog.String("error", err.Error()))
+			return fmt.Errorf("batch write failed: %w", err)
+		}
+		unprocessed = out.UnprocessedItems
+		if len(unprocessed[TableName]) == 0 {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("batch write left %d unprocessed items after retries", len(unprocessed[TableName]))
+}
+
 // GetRecentMessages retrieves the most recent messages for a given room
 func (r *DynamoDBRepository) GetRecentMessages(ctx context.Context, roomID string, limit int) ([]*message.Message, error) {
 	if roomID == "" {

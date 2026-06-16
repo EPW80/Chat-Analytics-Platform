@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"log/slog"
 	"time"
 
@@ -38,9 +37,14 @@ type Hub interface {
 	Broadcast(roomID string, data []byte)
 }
 
-// MessageRepository interface for message persistence
-type MessageRepository interface {
-	SaveMessage(ctx context.Context, msg *message.Message) error
+// Persister accepts messages for asynchronous, non-blocking persistence.
+type Persister interface {
+	Enqueue(msg *message.Message)
+}
+
+// Limiter decides whether an inbound message may be processed.
+type Limiter interface {
+	Allow() bool
 }
 
 // Client represents a WebSocket client connection
@@ -59,8 +63,11 @@ type Client struct {
 	userID   string
 	roomID   string
 
-	// Optional message storage (nil-safe)
-	storage MessageRepository
+	// Optional message persister (nil-safe)
+	persister Persister
+
+	// Optional inbound rate limiter (nil-safe)
+	limiter Limiter
 
 	// Optional analytics tracker (nil-safe)
 	analytics *analytics.Tracker
@@ -83,16 +90,20 @@ func New(hub Hub, conn *websocket.Conn, userID, username string, logger *slog.Lo
 		username:   username,
 		userID:     userID,
 		roomID:     defaultRoomID, // Can be overridden with SetRoom
-		storage:    nil,           // Can be set later with SetStorage
 		pongWait:   pongWait,
 		pingPeriod: pingPeriod,
 		logger:     logger,
 	}
 }
 
-// SetStorage sets the message repository for this client (optional)
-func (c *Client) SetStorage(storage MessageRepository) {
-	c.storage = storage
+// SetPersister sets the asynchronous message persister for this client (optional)
+func (c *Client) SetPersister(p Persister) {
+	c.persister = p
+}
+
+// SetRateLimiter sets the inbound rate limiter for this client (optional)
+func (c *Client) SetRateLimiter(l Limiter) {
+	c.limiter = l
 }
 
 // SetAnalytics attaches an analytics tracker to this client (optional)
@@ -156,6 +167,13 @@ func (c *Client) readPump() {
 			break
 		}
 
+		// Throttle abusive clients before doing any per-message work.
+		if c.limiter != nil && !c.limiter.Allow() {
+			c.logger.Debug("inbound message rate limited",
+				slog.String("clientID", c.id))
+			continue
+		}
+
 		// Parse and validate message
 		msg, err := message.FromJSON(data)
 		if err != nil {
@@ -186,20 +204,9 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// Non-blocking persistence (if storage is configured)
-		if c.storage != nil {
-			go func(msgCopy *message.Message) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-
-				if err := c.storage.SaveMessage(ctx, msgCopy); err != nil {
-					c.logger.Error("failed to persist message",
-						slog.String("clientID", c.id),
-						slog.String("messageId", msgCopy.MessageID),
-						slog.String("error", err.Error()))
-					// Don't block message delivery on storage failure
-				}
-			}(msg)
+		// Hand off to the persistence worker pool (non-blocking, nil-safe).
+		if c.persister != nil {
+			c.persister.Enqueue(msg)
 		}
 
 		if c.analytics != nil {

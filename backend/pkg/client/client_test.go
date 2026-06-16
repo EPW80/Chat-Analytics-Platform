@@ -1,8 +1,6 @@
 package client
 
 import (
-	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -463,39 +461,30 @@ func TestClient_MetadataOverride(t *testing.T) {
 	}
 }
 
-// mockStorage implements MessageRepository for testing
-type mockStorage struct {
+// mockPersister implements the Persister interface for testing. Enqueue records
+// synchronously, mirroring the non-blocking hand-off the client performs.
+type mockPersister struct {
 	mu       sync.Mutex
 	messages []*message.Message
-	errors   chan error
 }
 
-func newMockStorage() *mockStorage {
-	return &mockStorage{
-		messages: make([]*message.Message, 0),
-		errors:   make(chan error, 10),
-	}
+func newMockPersister() *mockPersister {
+	return &mockPersister{messages: make([]*message.Message, 0)}
 }
 
-func (m *mockStorage) SaveMessage(ctx context.Context, msg *message.Message) error {
-	select {
-	case err := <-m.errors:
-		return err
-	default:
-		m.mu.Lock()
-		m.messages = append(m.messages, msg)
-		m.mu.Unlock()
-		return nil
-	}
+func (m *mockPersister) Enqueue(msg *message.Message) {
+	m.mu.Lock()
+	m.messages = append(m.messages, msg)
+	m.mu.Unlock()
 }
 
-func (m *mockStorage) MessageCount() int {
+func (m *mockPersister) MessageCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.messages)
 }
 
-func (m *mockStorage) GetMessage(index int) *message.Message {
+func (m *mockPersister) GetMessage(index int) *message.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if index < 0 || index >= len(m.messages) {
@@ -504,13 +493,25 @@ func (m *mockStorage) GetMessage(index int) *message.Message {
 	return m.messages[index]
 }
 
-func (m *mockStorage) SimulateError(err error) {
-	m.errors <- err
+// allowN allows the first n calls and denies the rest. Safe for concurrent use.
+type allowN struct {
+	mu sync.Mutex
+	n  int
 }
 
-func TestClient_StoragePersistence(t *testing.T) {
+func (a *allowN) Allow() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.n > 0 {
+		a.n--
+		return true
+	}
+	return false
+}
+
+func TestClient_PersistsMessages(t *testing.T) {
 	hub := newMockHub()
-	storage := newMockStorage()
+	persister := newMockPersister()
 	logger := newTestLogger()
 
 	upgrader := websocket.Upgrader{}
@@ -522,7 +523,7 @@ func TestClient_StoragePersistence(t *testing.T) {
 		defer conn.Close()
 
 		client := New(hub, conn, "user123", "TestUser", logger)
-		client.SetStorage(storage)
+		client.SetPersister(persister)
 		client.Start()
 
 		time.Sleep(100 * time.Millisecond)
@@ -549,19 +550,17 @@ func TestClient_StoragePersistence(t *testing.T) {
 		t.Fatalf("write error: %v", err)
 	}
 
-	// Wait for async storage operation
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify message was persisted
-	if storage.MessageCount() != 1 {
-		t.Fatalf("expected 1 message in storage, got %d", storage.MessageCount())
+	// Verify message was enqueued for persistence
+	if persister.MessageCount() != 1 {
+		t.Fatalf("expected 1 enqueued message, got %d", persister.MessageCount())
 	}
 
-	storedMsg := storage.GetMessage(0)
+	storedMsg := persister.GetMessage(0)
 	if storedMsg == nil {
-		t.Fatal("stored message is nil")
+		t.Fatal("enqueued message is nil")
 	}
-
 	if storedMsg.Content != "Hello Storage" {
 		t.Errorf("expected content 'Hello Storage', got '%s'", storedMsg.Content)
 	}
@@ -570,7 +569,7 @@ func TestClient_StoragePersistence(t *testing.T) {
 	}
 }
 
-func TestClient_StorageNilSafe(t *testing.T) {
+func TestClient_PersisterNilSafe(t *testing.T) {
 	hub := newMockHub()
 	logger := newTestLogger()
 
@@ -582,7 +581,7 @@ func TestClient_StorageNilSafe(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// Client created without storage (nil)
+		// Client created without a persister (nil)
 		client := New(hub, conn, "user123", "TestUser", logger)
 		client.Start()
 
@@ -612,19 +611,15 @@ func TestClient_StorageNilSafe(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify message was still broadcast (nil storage doesn't break flow)
+	// Verify message was still broadcast (nil persister doesn't break flow)
 	if hub.BroadcastCount() != 1 {
 		t.Fatalf("expected 1 broadcast, got %d", hub.BroadcastCount())
 	}
 }
 
-func TestClient_StorageErrorHandling(t *testing.T) {
+func TestClient_RateLimited(t *testing.T) {
 	hub := newMockHub()
-	storage := newMockStorage()
 	logger := newTestLogger()
-
-	// Simulate storage error
-	storage.SimulateError(errors.New("storage unavailable"))
 
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -635,10 +630,10 @@ func TestClient_StorageErrorHandling(t *testing.T) {
 		defer conn.Close()
 
 		client := New(hub, conn, "user123", "TestUser", logger)
-		client.SetStorage(storage)
+		client.SetRateLimiter(&allowN{n: 2}) // allow only the first 2 messages
 		client.Start()
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}))
 	defer server.Close()
 
@@ -649,28 +644,23 @@ func TestClient_StorageErrorHandling(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Send a message
-	msg := &message.Message{
-		Type:     message.TypeChat,
-		UserID:   "user123",
-		Username: "TestUser",
-		Content:  "Test Error Handling",
-	}
-	data, _ := msg.ToJSON()
-	err = ws.WriteMessage(websocket.TextMessage, data)
-	if err != nil {
-		t.Fatalf("write error: %v", err)
+	// Send 5 messages; only the first 2 should pass the limiter.
+	for i := 0; i < 5; i++ {
+		msg := &message.Message{
+			Type:     message.TypeChat,
+			UserID:   "user123",
+			Username: "TestUser",
+			Content:  "spam",
+		}
+		data, _ := msg.ToJSON()
+		if err := ws.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("write error: %v", err)
+		}
 	}
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify message was still broadcast despite storage error
-	if hub.BroadcastCount() != 1 {
-		t.Fatalf("expected 1 broadcast despite storage error, got %d", hub.BroadcastCount())
-	}
-
-	// Verify storage attempted to save (and failed)
-	if storage.MessageCount() != 0 {
-		t.Errorf("expected 0 messages in storage due to error, got %d", storage.MessageCount())
+	if hub.BroadcastCount() != 2 {
+		t.Errorf("expected 2 broadcasts under rate limit, got %d", hub.BroadcastCount())
 	}
 }
