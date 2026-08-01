@@ -274,11 +274,31 @@ The live wire contract is `docs/briefing-frame-contract.md`. Module-level invari
 - Live server checks: with the feature off, `/api/briefings` 404s and no detector goroutine
   starts; with it on, the route returns `{"briefings":[]}` and path-traversal attempts 404.
 
+## Live verification (2026-07-31)
+
+Run against the real ElevenLabs API on a free-tier key.
+
+- **Phase 0 smoke test** — `tts_smoke.go` produced a 77 KB playable mp3. Endpoint, `xi-api-key`
+  header and request body all confirmed against the live service.
+- **Shipped client** — `ElevenLabs.Synthesize` via `Service.Handle`: first call 408 ms, second
+  call on identical input 0 ms with one file on disk. The content cache genuinely prevents a
+  second charge; this is the invariant that protects the credit budget.
+- **End to end** — a 200-message flood produced a `briefing.ready` frame within one detector
+  tick, `GET /api/briefings` returned the record, and `GET /api/briefings/{hash}/audio` served
+  150 KB of `audio/mpeg`.
+- **Billing** — 202 characters cost 101 credits, confirming `eleven_flash_v2_5` bills at half
+  rate. Note `BRIEFING_MONTHLY_CHAR_BUDGET` counts *characters* while ElevenLabs meters
+  *credits*, so on flash the guard is conservative by 2x. Intentional, but worth knowing before
+  tuning it.
+
+`RATE_LIMIT_PER_SEC` (default 5) throttles inbound messages, so a flood driven through a single
+client cannot reach the `SpikeFloor` of 50 messages/minute. Any load test of the detector has to
+raise or disable the limit, or spread traffic across many clients.
+
 ## Not yet done
 
-- **Phase 0 smoke test** — `backend/scripts/tts_smoke.go` has never been run against the real
-  API. The `ElevenLabs` client is tested end to end against an `httptest` server, but the live
-  endpoint is unverified. Run it once before enabling the feature.
 - **Phase 4 browser gates** — the localStorage toggle and the rejected-autoplay state need a
   real browser; there is no frontend test runner.
 - **Demo clip / deploy** — the Phase 5 acceptance gate.
+- **CI has never executed** — `.github/` did not exist before this work. The workflow passes
+  locally command-for-command, but its first real run is on the pushed commit.
