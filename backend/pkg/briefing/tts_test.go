@@ -56,7 +56,7 @@ func TestContentHash_DistinguishesVoiceAndModel(t *testing.T) {
 }
 
 // ttsServer stands in for the ElevenLabs API. Tests that use it never touch the
-// real endpoint — CI must never reach api.elevenlabs.io.
+// live endpoint — CI must never make outbound calls to ElevenLabs.
 func ttsServer(t *testing.T, handler http.HandlerFunc) (*ElevenLabs, *int32) {
 	t.Helper()
 	var calls int32
