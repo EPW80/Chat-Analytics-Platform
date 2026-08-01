@@ -10,6 +10,7 @@ import { Card } from './components/ui/Card';
 import { Input } from './components/ui/Input';
 import { StatusDot } from './components/ui/StatusDot';
 import { useAnalytics } from './hooks/useAnalytics';
+import { useBriefings } from './hooks/useBriefings';
 import { useWebSocket } from './hooks/useWebSocket';
 import { cn } from './lib/cn';
 
@@ -44,7 +45,11 @@ export default function App() {
   const userId = useMemo(() => generateUserId(), []);
   const wsUrl = confirmed ? `${WS_URL}?userId=${userId}&username=${encodeURIComponent(username)}` : '';
 
-  const { messages, sendMessage, isConnected, connectionStatus } = useWebSocket(wsUrl);
+  const { briefings, voiceEnabled, toggleVoice, needsGesture, onBriefingFrame, play } = useBriefings();
+
+  const { messages, sendMessage, isConnected, connectionStatus } = useWebSocket(wsUrl, {
+    onBriefing: onBriefingFrame,
+  });
   const { metrics } = useAnalytics(5000);
 
   const [tab, setTab] = useState<Tab>('chat');
@@ -132,7 +137,14 @@ export default function App() {
 
       {tab === 'analytics' && (
         <div className="flex flex-1 overflow-hidden">
-          <AnalyticsDashboard metrics={metrics} />
+          <AnalyticsDashboard
+            metrics={metrics}
+            briefings={briefings}
+            voiceEnabled={voiceEnabled}
+            needsGesture={needsGesture}
+            onToggleVoice={toggleVoice}
+            onPlayBriefing={play}
+          />
         </div>
       )}
     </div>

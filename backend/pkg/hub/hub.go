@@ -172,6 +172,30 @@ func (h *Hub) Broadcast(roomID string, message []byte) {
 	h.broadcast <- broadcastRequest{roomID: roomID, data: message}
 }
 
+// BroadcastAll sends a message to every connected client across all rooms.
+// Used for global notifications (voice briefings) not tied to one room's chat.
+// It snapshots room IDs under the read lock, then enqueues one broadcastRequest
+// per room so it reuses the same fan-out and latency tracking as Broadcast.
+//
+// With no rooms connected this is a no-op: there is nobody to notify.
+func (h *Hub) BroadcastAll(message []byte) {
+	h.mu.RLock()
+	rooms := make([]string, 0, len(h.rooms))
+	for room := range h.rooms {
+		rooms = append(rooms, room)
+	}
+	h.mu.RUnlock()
+
+	for _, room := range rooms {
+		select {
+		case h.broadcast <- broadcastRequest{roomID: room, data: message}:
+		case <-h.done:
+			// Shutting down: drop the rest rather than block on a drained loop.
+			return
+		}
+	}
+}
+
 // ClientCount returns the total number of connected clients across all rooms.
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()

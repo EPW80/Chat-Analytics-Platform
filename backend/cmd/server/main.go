@@ -14,6 +14,7 @@ import (
 
 	"github.com/epw80/chat-analytics-platform/pkg/analytics"
 	"github.com/epw80/chat-analytics-platform/pkg/auth"
+	"github.com/epw80/chat-analytics-platform/pkg/briefing"
 	"github.com/epw80/chat-analytics-platform/pkg/client"
 	"github.com/epw80/chat-analytics-platform/pkg/config"
 	"github.com/epw80/chat-analytics-platform/pkg/hub"
@@ -59,6 +60,13 @@ type Server struct {
 	allowedOrigins  []string
 	rateLimitPerSec float64
 	rateLimitBurst  float64
+
+	// Voice briefings. All nil/empty unless BRIEFING_ENABLED is set, so the
+	// feature is fully absent from an identical binary.
+	briefing         *briefing.Service
+	runner           *briefing.Runner
+	briefingStore    *briefing.Store
+	briefingAudioDir string
 }
 
 func NewServer(logger *slog.Logger, repo storage.MessageRepository, cfg *config.Config) *Server {
@@ -88,6 +96,27 @@ func NewServer(logger *slog.Logger, repo storage.MessageRepository, cfg *config.
 	// Enable token auth only when a secret is configured.
 	if cfg.AuthSecret != "" {
 		s.auth = auth.New(cfg.AuthSecret)
+	}
+
+	// Voice briefings are an optional dependency, same shape as storage and
+	// persistence: constructed only when enabled, nil-guarded at every call site.
+	if cfg.BriefingEnabled {
+		synth := briefing.NewElevenLabs(cfg.ElevenLabsKey, cfg.ElevenLabsVoice, cfg.BriefingAudioDir)
+		synth.ModelID = cfg.ElevenLabsModel
+		synth.CharBudget = cfg.BriefingCharBudget
+
+		s.briefingStore = briefing.NewStore(50)
+		s.briefingAudioDir = cfg.BriefingAudioDir
+		s.briefing = briefing.New(synth, s.briefingStore, logger)
+
+		det := analytics.NewDetector(analytics.DefaultThresholds())
+		s.runner = briefing.NewRunner(tracker, det, s.briefing, h.BroadcastAll, 5*time.Second, logger)
+
+		logger.Info("voice briefings enabled",
+			"model", cfg.ElevenLabsModel,
+			"audioDir", cfg.BriefingAudioDir,
+			"charBudget", cfg.BriefingCharBudget,
+		)
 	}
 
 	s.upgrader = websocket.Upgrader{
@@ -372,6 +401,14 @@ func (s *Server) setupRoutes() http.Handler {
 	mux.HandleFunc("/api/analytics", analytics.NewHandler(s.analytics))
 	mux.HandleFunc("GET /api/rooms/{id}/messages", s.handleRoomMessages)
 	mux.HandleFunc("GET /api/users/{id}/messages", s.handleUserMessages)
+
+	// Briefing routes exist only when the feature is on, so a disabled server
+	// 404s them rather than serving an empty list.
+	if s.briefing != nil {
+		mux.HandleFunc("GET /api/briefings", briefing.NewListHandler(s.briefingStore))
+		mux.HandleFunc("GET /api/briefings/{hash}/audio", briefing.NewAudioHandler(s.briefingStore, s.briefingAudioDir))
+	}
+
 	return corsMiddleware(s.allowedOrigins, mux)
 }
 
@@ -428,6 +465,11 @@ func main() {
 		srv.persister.Start()
 	}
 
+	// Start the anomaly detector loop (nil when briefings are disabled).
+	if srv.runner != nil {
+		go srv.runner.Run()
+	}
+
 	// Setup HTTP server
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -460,6 +502,12 @@ func main() {
 	// Shutdown HTTP server
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Error("server forced to shutdown", slog.String("error", err.Error()))
+	}
+
+	// Stop the detector before the hub, so no briefing is broadcast into a
+	// hub that is already shutting down.
+	if srv.runner != nil {
+		srv.runner.Stop()
 	}
 
 	// Shutdown hub (stops clients, so no further messages are enqueued)

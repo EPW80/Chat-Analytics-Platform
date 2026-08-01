@@ -403,3 +403,52 @@ func BenchmarkHub_RegisterUnregister(b *testing.B) {
 		hub.Unregister(client)
 	}
 }
+
+// BroadcastAll is the delivery path for voice briefings: the analytics tracker
+// is global, so an anomaly is not tied to any one room's chat.
+func TestHub_BroadcastAll(t *testing.T) {
+	hub := newTestHub()
+	go hub.Run()
+	defer hub.Shutdown()
+
+	clients := []*mockClient{
+		newMockClientInRoom("client1", "global"),
+		newMockClientInRoom("client2", "global"),
+		newMockClientInRoom("client3", "gaming"),
+		newMockClientInRoom("client4", "music"),
+	}
+	for _, c := range clients {
+		hub.Register(c)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	hub.BroadcastAll([]byte(`{"type":"briefing.ready"}`))
+	time.Sleep(20 * time.Millisecond)
+
+	// Every client, in every room, sees it exactly once.
+	for _, c := range clients {
+		if count := c.MessageCount(); count != 1 {
+			t.Errorf("client %s in room %s: expected 1 message, got %d", c.ID(), c.RoomID(), count)
+		}
+	}
+}
+
+// A briefing fired while nobody is connected must not block or panic — there is
+// simply nobody to notify.
+func TestHub_BroadcastAllToZeroClients(t *testing.T) {
+	hub := newTestHub()
+	go hub.Run()
+	defer hub.Shutdown()
+
+	done := make(chan struct{})
+	go func() {
+		hub.BroadcastAll([]byte("nobody home"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("BroadcastAll blocked with no rooms connected")
+	}
+}

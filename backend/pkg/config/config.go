@@ -32,6 +32,23 @@ type Config struct {
 	PersistWorkers   int
 	PersistBatchSize int
 	PersistQueueSize int
+
+	// Voice briefings. BriefingEnabled gates the whole feature: when false the
+	// detector goroutine, briefing service and routes are never constructed.
+	BriefingEnabled bool
+
+	// ElevenLabs credentials and model for briefing text-to-speech.
+	ElevenLabsKey   string
+	ElevenLabsVoice string
+	ElevenLabsModel string
+
+	// BriefingAudioDir is where synthesized mp3s are written and cached. It must
+	// live on a persisted volume or the content-hash cache is lost on restart.
+	BriefingAudioDir string
+
+	// BriefingCharBudget caps characters synthesized per month. Past the budget,
+	// synthesis is refused and briefings degrade to text-only.
+	BriefingCharBudget int
 }
 
 // Load reads configuration from environment variables
@@ -53,6 +70,13 @@ func Load() *Config {
 		PersistWorkers:   getEnvInt("PERSIST_WORKERS", 4),
 		PersistBatchSize: getEnvInt("PERSIST_BATCH_SIZE", 25),
 		PersistQueueSize: getEnvInt("PERSIST_QUEUE_SIZE", 1024),
+
+		BriefingEnabled:    getEnvBool("BRIEFING_ENABLED", false),
+		ElevenLabsKey:      getEnv("ELEVENLABS_API_KEY", ""),
+		ElevenLabsVoice:    getEnv("ELEVENLABS_VOICE_ID", ""),
+		ElevenLabsModel:    getEnv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
+		BriefingAudioDir:   getEnv("BRIEFING_AUDIO_DIR", "/data/briefings"),
+		BriefingCharBudget: getEnvInt("BRIEFING_MONTHLY_CHAR_BUDGET", 10000),
 	}
 }
 
@@ -81,6 +105,18 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 	if value := os.Getenv(key); value != "" {
 		if f, err := strconv.ParseFloat(value, 64); err == nil {
 			return f
+		}
+	}
+	return defaultValue
+}
+
+// getEnvBool reads a boolean environment variable, falling back on absence or a
+// parse error. Accepts the strconv.ParseBool set: 1/t/T/TRUE/true/True and the
+// false equivalents.
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(value)); err == nil {
+			return b
 		}
 	}
 	return defaultValue

@@ -8,11 +8,17 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import type { AnalyticsMetrics } from '../types/message';
+import type { AnalyticsMetrics, Briefing } from '../types/message';
+import { BriefingPanel } from './BriefingPanel';
 import { Card } from './ui/Card';
 
 interface Props {
   metrics: AnalyticsMetrics | null;
+  briefings: Briefing[];
+  voiceEnabled: boolean;
+  needsGesture: boolean;
+  onToggleVoice: () => void;
+  onPlayBriefing: (briefing: Briefing) => void;
 }
 
 function MetricCard({
@@ -64,7 +70,14 @@ function formatUptime(seconds: number): string {
   return `${s}s`;
 }
 
-export function AnalyticsDashboard({ metrics }: Props) {
+export function AnalyticsDashboard({
+  metrics,
+  briefings,
+  voiceEnabled,
+  needsGesture,
+  onToggleVoice,
+  onPlayBriefing,
+}: Props) {
   if (!metrics) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-subtle">
@@ -103,6 +116,14 @@ export function AnalyticsDashboard({ metrics }: Props) {
         <MetricCard label="Latency P99" value={metrics.latencyP99Ms.toFixed(2)} unit="ms" Icon={Gauge} />
         <MetricCard label="Server Uptime" value={formatUptime(metrics.uptimeSeconds)} Icon={Clock} />
       </div>
+
+      <BriefingPanel
+        briefings={briefings}
+        voiceEnabled={voiceEnabled}
+        needsGesture={needsGesture}
+        onToggleVoice={onToggleVoice}
+        onPlay={onPlayBriefing}
+      />
     </div>
   );
 }

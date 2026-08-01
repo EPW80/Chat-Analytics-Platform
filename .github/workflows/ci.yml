@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: backend/go.sum
+
+      # Tests use the Mock Synthesizer, never the network. A live call would
+      # burn ElevenLabs credits on every CI run and go flaky on their rate
+      # limits, so referencing the real endpoint from a test fails the build.
+      - name: Guard against live TTS calls in tests
+        run: |
+          if grep -rn "api.elevenlabs.io" pkg/briefing/*_test.go; then
+            echo "::error::test files must not reference the live ElevenLabs endpoint"
+            exit 1
+          fi
+
+      - name: gofmt
+        run: gofmt -l pkg/ cmd/ | tee /dev/stderr | (! read)
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -race
+
+  frontend:
+    name: Frontend (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

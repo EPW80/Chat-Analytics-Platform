@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/epw80/chat-analytics-platform/pkg/config"
@@ -165,5 +166,50 @@ func TestParseLimit(t *testing.T) {
 		if got := parseLimit(req); got != tc.want {
 			t.Errorf("parseLimit(%q) = %d, want %d", tc.query, got, tc.want)
 		}
+	}
+}
+
+// Voice briefings are an optional dependency: with BRIEFING_ENABLED unset, the
+// same binary must have no service, no detector goroutine, and no routes.
+func TestBriefingsDisabledByDefault(t *testing.T) {
+	srv := testServer(nil)
+
+	if srv.briefing != nil || srv.runner != nil || srv.briefingStore != nil {
+		t.Errorf("briefing deps constructed while disabled: service=%v runner=%v store=%v",
+			srv.briefing != nil, srv.runner != nil, srv.briefingStore != nil)
+	}
+
+	routes := srv.setupRoutes()
+	for _, path := range []string{"/api/briefings", "/api/briefings/abc123/audio"} {
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s returned %d while briefings are disabled, want 404", path, rec.Code)
+		}
+	}
+}
+
+func TestBriefingsEnabledRegistersRoutes(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := NewServer(logger, nil, &config.Config{
+		AllowedOrigins:   []string{"*"},
+		BriefingEnabled:  true,
+		ElevenLabsKey:    "test-key",
+		ElevenLabsVoice:  "test-voice",
+		ElevenLabsModel:  "eleven_flash_v2_5",
+		BriefingAudioDir: t.TempDir(),
+	})
+
+	if srv.briefing == nil || srv.runner == nil || srv.briefingStore == nil {
+		t.Fatal("briefing deps not constructed while enabled")
+	}
+
+	rec := httptest.NewRecorder()
+	srv.setupRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/briefings", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /api/briefings returned %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"briefings"`) {
+		t.Errorf("unexpected body: %s", rec.Body)
 	}
 }

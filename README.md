@@ -57,6 +57,7 @@ The platform provides real-time room-based chat with live analytics: message thr
 - **Token auth** — optional HMAC-signed bearer tokens (enabled when `AUTH_SECRET` is set); falls back to a `userId` query param for local development.
 - **Configurable CORS / WebSocket origin allowlist.**
 - **Graceful degradation** — runs without DynamoDB (chat + live analytics still work, no persistence).
+- **Voice Ops Briefings** — an anomaly detector watches the live metrics and narrates traffic events aloud in a control-room register via ElevenLabs TTS. Off by default; see below.
 - **Polished React frontend** — refined dark theme, design tokens, reusable UI primitives, avatars, virtualized message list, and a live metrics dashboard.
 - **Comprehensive tests** — every backend package has a `_test.go`; the suite runs clean under `-race`.
 
@@ -166,6 +167,57 @@ Recent message history for a room or a user. Optional `?limit=` (default 50, max
 ```
 **Types:** `chat`, `system`, `join`, `leave`. **Validation:** username required (≤50 chars); chat content required (≤1000 chars); `messageId`/`timestamp`/`roomId` are server-authoritative.
 
+## Voice Ops Briefings
+
+An anomaly detector polls the live metrics every 5 seconds and narrates traffic events aloud, so an operator watching the dashboard hears about a spike instead of having to notice it.
+
+```
+ ticker (5s, own goroutine)  — never on the message hot path
+        ▼
+ analytics.Detector.Check(tracker.GetMetrics(), now) ──► []Anomaly
+        ▼                      (stateful: prev snapshot + per-(kind,scope) debounce)
+ briefing.Compose(anomaly) ──► script            [pure templates, no LLM]
+        ▼
+ briefing.ElevenLabs.Synthesize(ctx, script) ──► mp3   [SHA-256 content cache]
+        ├──► briefing.Store.Add(record)          (in-memory ring buffer)
+        ├──► write {BRIEFING_AUDIO_DIR}/{hash}.mp3
+        └──► hub.BroadcastAll({"type":"briefing.ready", ...})
+```
+
+**Detected conditions:** message-rate spike, p99 latency breach, connection surge, traffic dropout — each in a Yellow or Red severity band, debounced to at most one briefing per kind per 5 minutes.
+
+A sample script, as spoken:
+
+> Ops, analytics. Message-rate spike in the global room — four hundred messages per minute against a baseline of ninety. Monitoring.
+
+**Design notes.** Detection reads a metrics snapshot on a ticker and never touches the broadcast loop. Synthesis takes 1–3s, so each anomaly is dispatched to its own goroutine — awaiting it inline would silently back up metric polling. Audio is cached by SHA-256 of (script + voice + model), so identical input is never billed twice. Scripts are deterministic templates, not LLM output, and the script doubles as the fallback artifact: if ElevenLabs is down or the character budget is spent, the briefing still ships as text.
+
+The whole feature is an optional dependency. With `BRIEFING_ENABLED=false` the detector goroutine never starts and the routes are not registered — the same binary, feature dark.
+
+### `GET /api/briefings?limit=N`
+Recent briefings, newest first, from the in-memory ring buffer. `404` when the feature is disabled.
+
+```json
+{ "briefings": [
+  {
+    "hash": "3c556b79...",
+    "kind": "rate_spike",
+    "scope": "global",
+    "severity": "yellow",
+    "script": "Ops, analytics. Message-rate spike in the global room ...",
+    "audioUrl": "/api/briefings/3c556b79.../audio",
+    "createdAt": "2026-07-31T18:04:11Z"
+  }
+] }
+```
+
+`kind` ∈ `rate_spike | latency_breach | connection_surge | traffic_dropout`; `severity` ∈ `yellow | red`; `audioUrl` is `""` for a text-only briefing.
+
+### `GET /api/briefings/{hash}/audio`
+Serves the mp3 (`Content-Type: audio/mpeg`). `404` if the hash is unknown or the briefing is text-only.
+
+The same payload arrives over the WebSocket as a `{"type": "briefing.ready", "briefing": {...}}` frame — no separate socket. The frontend plays it only when the **Voice on** toggle is set (persisted to localStorage, default off), since browsers reject audio autoplay before a user gesture.
+
 ## Project Structure
 
 ```
@@ -173,8 +225,9 @@ RealTimeChatAnalyticsPlatform/
 ├── backend/                     # Go WebSocket server
 │   ├── cmd/server/              # Entry point, HTTP routes, wiring
 │   └── pkg/
-│       ├── analytics/           # Atomic counters, sliding window, /api/analytics
+│       ├── analytics/           # Atomic counters, sliding window, anomaly detector
 │       ├── auth/                # HMAC-signed token authenticator
+│       ├── briefing/            # Voice briefings: compose, TTS, store, runner
 │       ├── client/              # Per-connection read/write pumps
 │       ├── config/              # Environment configuration
 │       ├── hub/                 # Room-based connection manager
@@ -186,7 +239,7 @@ RealTimeChatAnalyticsPlatform/
 │   └── src/
 │       ├── components/          # Chat, message list, input, user list, dashboard
 │       │   └── ui/              # Reusable primitives (Button, Card, Badge, …)
-│       ├── hooks/               # useWebSocket, useAnalytics, useElementSize
+│       ├── hooks/               # useWebSocket, useAnalytics, useBriefings, useElementSize
 │       ├── lib/                 # cn, userColor helpers
 │       └── types/               # Shared TypeScript types
 ├── scripts/                     # init-tables.sh, wait-for-dynamodb.sh, …
@@ -210,6 +263,11 @@ Backend (environment variables):
 | `AUTH_SECRET` | — | HMAC secret; empty disables token auth |
 | `RATE_LIMIT_PER_SEC` / `RATE_LIMIT_BURST` | `5` / `10` | per-connection token bucket (`<=0` disables) |
 | `PERSIST_WORKERS` / `PERSIST_BATCH_SIZE` / `PERSIST_QUEUE_SIZE` | `4` / `25` / `1024` | persistence pool tuning |
+| `BRIEFING_ENABLED` | `false` | master switch for Voice Ops Briefings |
+| `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` | — | ElevenLabs credentials; required when briefings are on |
+| `ELEVENLABS_MODEL_ID` | `eleven_flash_v2_5` | TTS model; flash is fast and ~half the credit cost |
+| `BRIEFING_MONTHLY_CHAR_BUDGET` | `10000` | characters/month before synthesis is refused (`<=0` disables the guard) |
+| `BRIEFING_AUDIO_DIR` | `/data/briefings` | mp3 cache directory; must be on a persisted volume |
 
 Frontend: `VITE_WS_URL` (WebSocket URL) and `VITE_API_URL` (REST base), baked in at build time.
 

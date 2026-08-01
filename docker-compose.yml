@@ -24,6 +24,18 @@ services:
       - AWS_ACCESS_KEY_ID=dummy
       - AWS_SECRET_ACCESS_KEY=dummy
       - LOG_LEVEL=info
+      # Voice Ops Briefings. Off by default; set BRIEFING_ENABLED=true and
+      # supply credentials (via a .env file, not this checked-in config).
+      - BRIEFING_ENABLED=${BRIEFING_ENABLED:-false}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-}
+      - ELEVENLABS_MODEL_ID=${ELEVENLABS_MODEL_ID:-eleven_flash_v2_5}
+      - BRIEFING_MONTHLY_CHAR_BUDGET=${BRIEFING_MONTHLY_CHAR_BUDGET:-10000}
+      - BRIEFING_AUDIO_DIR=/data/briefings
+    volumes:
+      # Synthesized mp3s are the content-hash cache. On an ephemeral filesystem
+      # every restart re-synthesizes the same briefings and re-bills for them.
+      - briefing-audio:/data/briefings
     depends_on:
       - dynamodb
     networks:
@@ -53,3 +65,6 @@ services:
 networks:
   chat-network:
     driver: bridge
+
+volumes:
+  briefing-audio:

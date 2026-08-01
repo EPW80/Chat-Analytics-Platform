@@ -6,10 +6,13 @@ Real-time Twitch-style chat analytics. Go WebSocket backend, React/TypeScript fr
 
 - Phase 1 (WebSocket core): COMPLETE
 - Phase 2A (Docker + DynamoDB): IN PROGRESS — table init debugging
-- Phase 2B (Analytics backend): PENDING
-- Phase 2C (React frontend): PENDING
+- Phase 2B (Analytics backend): COMPLETE
+- Phase 2C (React frontend): COMPLETE
+- Phase 3 (Voice Ops Briefings): COMPLETE — off by default via `BRIEFING_ENABLED`
 
 For full architecture, schemas, and phase details, see `docs/BUILD_PLAN.md`.
+For the voice briefings feature, see `docs/VOICE_BRIEFINGS_PLAN.md` and
+`docs/briefing-frame-contract.md`.
 
 ## Stack
 
@@ -37,8 +40,9 @@ backend/pkg/client/               # Per-connection read/write pumps
 backend/pkg/message/              # Message types + validation
 backend/pkg/storage/              # DynamoDB repository (interface-based)
 backend/pkg/config/               # Environment variable loading
-backend/pkg/analytics/            # Metrics tracking (Phase 2B)
-frontend/src/                     # React app (Phase 2C)
+backend/pkg/analytics/            # Metrics tracking + anomaly Detector
+backend/pkg/briefing/             # Voice briefings: compose, TTS, store, runner
+frontend/src/                     # React app
 ```
 
 ## Conventions
@@ -54,7 +58,7 @@ frontend/src/                     # React app (Phase 2C)
 
 - Every new package gets a `_test.go` file. Run `go test ./... -race` before committing.
 - Hub, Client, Message, Config, Storage packages all have existing test suites — don't break them.
-- `IMPORTANT:` There is a pre-existing race condition in `TestClient_PingPong`. Do not spend time fixing it unless explicitly asked.
+- The historical `TestClient_PingPong` race was fixed (atomic ping counter in the test); the whole suite now runs under `-race` in one step, locally and in CI. Keep it that way.
 
 ## Key Patterns
 
@@ -63,10 +67,13 @@ frontend/src/                     # React app (Phase 2C)
 - Storage layer is interface-based (`MessageRepository`) for testability and nil-safe graceful degradation
 - DynamoDB: partition key = RoomID, sort key = MessageID (UUID). Two GSIs for user history and chronological queries
 
-## When Working on Phase 2B
+## When Working on Voice Briefings
 
-Read `docs/BUILD_PLAN.md` § "Phase 2B: Analytics Backend" before starting. Key constraint: analytics tracker integrates into Hub (joins/leaves/latency) and Client (message tracking), passed as optional dependency same as storage.
+Read `backend/pkg/briefing/CLAUDE.md` first; `docs/VOICE_BRIEFINGS_PLAN.md` has the full rationale.
 
-## When Working on Phase 2C
-
-Read `docs/BUILD_PLAN.md` § "Phase 2C: React Frontend" before starting. Key constraint: useWebSocket hook must implement exponential backoff reconnection (max 5 attempts). Use react-window for message list virtualization.
+- Detection runs on a 5s ticker reading `Tracker.GetMetrics()`. It never touches `TrackMessage` or the broadcast loop.
+- Don't await `Service.Handle` on the ticker. Do dispatch each anomaly to its own goroutine. `IMPORTANT:` synthesis takes 1–3s; inline awaiting silently backs up metric polling with no error anywhere.
+- Don't put an LLM in the compose path. Do keep `Compose` a pure template function — the script is the text-only fallback when TTS fails.
+- Don't re-synthesize equal input. Do rely on the SHA-256 content cache; every miss bills ElevenLabs credits.
+- Don't let tests reach `api.elevenlabs.io`. Do swap in the `Mock` Synthesizer — CI enforces this with a grep guard.
+- Briefing history is an in-memory ring buffer in v1. Persisting it to DynamoDB means hand-writing the schema (see the convention above).

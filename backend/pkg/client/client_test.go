@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,10 +286,12 @@ func TestClient_PingPong(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Set up ping handler (client sends pings, we expect to receive them)
-	pingReceived := 0
+	// Set up ping handler (client sends pings, we expect to receive them).
+	// The handler runs on the reader goroutine below while the test goroutine
+	// polls the count, so the counter must be atomic.
+	var pingReceived atomic.Int64
 	ws.SetPingHandler(func(string) error {
-		pingReceived++
+		pingReceived.Add(1)
 		// Send pong in response
 		ws.WriteControl(websocket.PongMessage, []byte{}, time.Now().Add(writeWait))
 		return nil
@@ -309,8 +312,8 @@ func TestClient_PingPong(t *testing.T) {
 	time.Sleep(testPingPeriod * 4)
 
 	// Should have received at least 2 pings
-	if pingReceived < 2 {
-		t.Errorf("expected at least 2 pings, got %d", pingReceived)
+	if got := pingReceived.Load(); got < 2 {
+		t.Errorf("expected at least 2 pings, got %d", got)
 	}
 
 	ws.Close()
