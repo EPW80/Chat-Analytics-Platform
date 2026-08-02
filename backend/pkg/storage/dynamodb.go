@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -276,7 +277,17 @@ func (r *DynamoDBRepository) GetMessagesByUser(ctx context.Context, userID strin
 	return messages, nil
 }
 
-// EnsureTable creates the DynamoDB table if it does not already exist
+// isTableNotFound reports whether err means the table is genuinely absent, as
+// opposed to DynamoDB being unreachable or throttling. Treating every error as
+// "absent" sends a transient blip down the create path, where CreateTable answers
+// ResourceInUseException and the whole init fails.
+func isTableNotFound(err error) bool {
+	var notFound *types.ResourceNotFoundException
+	return errors.As(err, &notFound)
+}
+
+// EnsureTable creates the DynamoDB table if it does not already exist, and does
+// not return until the table is usable.
 func (r *DynamoDBRepository) EnsureTable(ctx context.Context) error {
 	schema := GetTableSchema()
 
@@ -286,9 +297,21 @@ func (r *DynamoDBRepository) EnsureTable(ctx context.Context) error {
 	_, err := r.client.DescribeTable(descCtx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(schema.TableName),
 	})
-	if err == nil {
+	switch {
+	case err == nil:
+		// The table exists, but may still be CREATING from a previous start, so
+		// fall through to the wait rather than returning straight away.
 		r.logger.Info("DynamoDB table already exists", slog.String("table", schema.TableName))
-		return nil
+		return r.waitForActive(ctx, schema.TableName)
+
+	case isTableNotFound(err):
+		// Genuinely absent — create it below.
+
+	default:
+		// Throttled, unreachable, credentials rejected: anything but absent. Say so
+		// instead of falling through to CreateTable and failing with a misleading
+		// ResourceInUseException.
+		return fmt.Errorf("failed to describe table %s: %w", schema.TableName, err)
 	}
 
 	r.logger.Info("creating DynamoDB table", slog.String("table", schema.TableName))
@@ -336,6 +359,22 @@ func (r *DynamoDBRepository) EnsureTable(ctx context.Context) error {
 	}
 
 	r.logger.Info("DynamoDB table created successfully", slog.String("table", schema.TableName))
+	return r.waitForActive(ctx, schema.TableName)
+}
+
+// waitForActive blocks until the table is ACTIVE. CreateTable returns as soon as
+// the request is accepted, so against real AWS (unlike DynamoDB Local, which is
+// effectively instant) the first writes would otherwise land on a CREATING table.
+// The 60s ceiling fits inside the 90s init budget the server allocates.
+func (r *DynamoDBRepository) waitForActive(ctx context.Context, tableName string) error {
+	waiter := dynamodb.NewTableExistsWaiter(r.client)
+	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(tableName),
+	}, 60*time.Second); err != nil {
+		return fmt.Errorf("table %s did not become active: %w", tableName, err)
+	}
+
+	r.logger.Info("DynamoDB table is active", slog.String("table", tableName))
 	return nil
 }
 
