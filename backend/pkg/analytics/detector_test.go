@@ -15,14 +15,17 @@ func mkMetrics(perMin []int64, p99 float64, activeConns int64) Metrics {
 	}
 }
 
-// window builds a 15-slot MessagesPerMinute window: 14 baseline slots at `base`,
-// current minute at `cur`.
+// window builds a 15-slot MessagesPerMinute window: 13 baseline slots at `base`,
+// the most recent COMPLETE minute at `cur` in slot 13, and slot 14 left at zero.
+// Slot 14 is the minute currently in progress, which the detector ignores — see
+// rateWindow. Placing `cur` there instead would encode the bug this helper's
+// previous version was written against.
 func window(base, cur int64) []int64 {
 	w := make([]int64, 15)
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 13; i++ {
 		w[i] = base
 	}
-	w[14] = cur
+	w[13] = cur
 	return w
 }
 
@@ -192,6 +195,38 @@ func TestDetector_TrafficDropout(t *testing.T) {
 	quiet.Check(mkMetrics(window(0, 0), 5, 10), now)
 	if got := quiet.Check(mkMetrics(window(0, 0), 5, 10), now.Add(time.Minute)); len(got) != 0 {
 		t.Fatalf("idle-to-idle should not fire, got %v", got)
+	}
+}
+
+// A busy server rotating into a new minute must not report a dropout: the freshly
+// zeroed slot is the minute in progress, not silence. The runner polls every 5s
+// while the window rotates every 60s, so treating the partial slot as the current
+// rate fired a spurious traffic_dropout at the top of every minute — roughly 12
+// briefings an hour after debounce, each one an ElevenLabs charge.
+func TestDetector_NoDropoutAtMinuteRotation(t *testing.T) {
+	now := time.Now()
+	d := NewDetector(DefaultThresholds())
+
+	// Steady traffic. Slot 14 is the minute in progress, partway to ~200.
+	before := make([]int64, 15)
+	for i := 0; i < 14; i++ {
+		before[i] = 200
+	}
+	before[14] = 195
+
+	// The window rotates: every slot shifts left and the new slot 14 starts at 0.
+	after := make([]int64, 15)
+	for i := 0; i < 13; i++ {
+		after[i] = 200
+	}
+	after[13] = 195
+	after[14] = 0
+
+	if got := d.Check(mkMetrics(before, 5, 10), now); len(got) != 0 {
+		t.Fatalf("steady traffic should report nothing, got %v", got)
+	}
+	if got := d.Check(mkMetrics(after, 5, 10), now.Add(5*time.Second)); len(got) != 0 {
+		t.Fatalf("minute rotation on a busy server must not fire, got %v", got)
 	}
 }
 
