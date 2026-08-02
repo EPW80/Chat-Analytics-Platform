@@ -286,6 +286,37 @@ func TestHub_Shutdown(t *testing.T) {
 	}
 }
 
+// After Run returns, nothing drains the register/unregister/broadcast channels.
+// Unguarded sends block forever, and because readPump calls Unregister from a
+// defer that leaks every client goroutine on shutdown. Every send method must
+// return promptly once the hub is down.
+func TestHub_SendsDoNotBlockAfterShutdown(t *testing.T) {
+	hub := newTestHub()
+	go hub.Run()
+
+	client := newMockClient("late")
+	hub.Register(client)
+	time.Sleep(10 * time.Millisecond)
+
+	hub.Shutdown()
+	time.Sleep(10 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		hub.Register(newMockClient("after-shutdown"))
+		hub.Unregister(client)
+		hub.Broadcast("global", []byte("post-shutdown"))
+		hub.BroadcastAll([]byte("post-shutdown"))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("hub send methods blocked after shutdown; client goroutines would leak")
+	}
+}
+
 func TestHub_UnregisterNonExistentClient(t *testing.T) {
 	hub := newTestHub()
 	go hub.Run()

@@ -179,19 +179,26 @@ func (d *Detector) Check(cur Metrics, now time.Time) []Anomaly {
 	return out
 }
 
-// rateWindow splits a MessagesPerMinute window into the current minute and the
-// mean of the preceding slots. ok is false when the window is too short to
-// compare against (fewer than 2 slots).
+// rateWindow splits a MessagesPerMinute window into the most recent COMPLETE
+// minute and the mean of the minutes before it. The final slot is the minute
+// currently in progress: it is a partial count that resets on every rotation, so
+// comparing it against full-minute baselines reports a dropout at the top of
+// every minute on a busy server. ok is false when the window is too short to hold
+// a complete minute plus a baseline.
+//
+// The cost of ignoring the partial slot is granularity: an event is only visible
+// once the minute containing it has closed, so detection lags by up to a minute.
 func rateWindow(perMin []int64) (current int64, baseline float64, ok bool) {
-	if len(perMin) < 2 {
+	if len(perMin) < 3 {
 		return 0, 0, false
 	}
-	current = perMin[len(perMin)-1]
+	complete := perMin[:len(perMin)-1] // drop the in-progress slot
+	current = complete[len(complete)-1]
 	var sum int64
-	for _, v := range perMin[:len(perMin)-1] {
+	for _, v := range complete[:len(complete)-1] {
 		sum += v
 	}
-	baseline = float64(sum) / float64(len(perMin)-1)
+	baseline = float64(sum) / float64(len(complete)-1)
 	return current, baseline, true
 }
 

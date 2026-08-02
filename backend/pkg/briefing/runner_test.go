@@ -53,12 +53,16 @@ func (c *capture) first() []byte {
 }
 
 // spikeMetrics is a snapshot that trips the rate-spike rule.
+// spikeMetrics builds a window the detector reads as a rate spike: a 90/min
+// baseline with 400 in slot 13, the most recent COMPLETE minute. Slot 14 is the
+// minute in progress and is deliberately left at zero — the detector ignores it,
+// so putting the spike there would produce a fixture that never fires.
 func spikeMetrics() analytics.Metrics {
 	perMin := make([]int64, 15)
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 13; i++ {
 		perMin[i] = 90
 	}
-	perMin[14] = 400
+	perMin[13] = 400
 	return analytics.Metrics{MessagesPerMinute: perMin}
 }
 

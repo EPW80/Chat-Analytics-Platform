@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/epw80/chat-analytics-platform/pkg/message"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -429,13 +430,19 @@ func TestClient_MetadataOverride(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Send message with different userID/username (should be overridden)
+	// Send a message that forges every server-owned field. MessageID is the DynamoDB
+	// sort key and Timestamp is the GSI sort key: honouring either would let this
+	// connection overwrite another client's row or pin itself to the head of history.
+	forgedTimestamp := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 	msg := &message.Message{
-		Type:     message.TypeChat,
-		UserID:   "fakeUser",
-		Username: "FakeName",
-		Content:  "Hello",
+		Type:      message.TypeChat,
+		UserID:    "fakeUser",
+		Username:  "FakeName",
+		Content:   "Hello",
+		MessageID: "attacker-controlled",
+		Timestamp: forgedTimestamp,
 	}
+	sentAt := time.Now().UTC()
 	data, _ := msg.ToJSON()
 	err = ws.WriteMessage(websocket.TextMessage, data)
 	if err != nil {
@@ -461,6 +468,23 @@ func TestClient_MetadataOverride(t *testing.T) {
 	}
 	if broadcastMsg.Username != "ActualName" {
 		t.Errorf("expected username 'ActualName', got '%s'", broadcastMsg.Username)
+	}
+
+	// The forged sort keys must not survive: a replayed MessageID would overwrite the
+	// peer's row on PutItem, and a far-future Timestamp would pin this message to the
+	// head of the chronological GSI permanently.
+	if broadcastMsg.MessageID == "attacker-controlled" {
+		t.Error("client-supplied messageID was honoured; server must generate it")
+	}
+	if _, err := uuid.Parse(broadcastMsg.MessageID); err != nil {
+		t.Errorf("expected a server-generated UUID, got '%s': %v", broadcastMsg.MessageID, err)
+	}
+	if broadcastMsg.Timestamp.Equal(forgedTimestamp) {
+		t.Error("client-supplied timestamp was honoured; server must generate it")
+	}
+	if broadcastMsg.Timestamp.Before(sentAt) || broadcastMsg.Timestamp.After(time.Now().UTC()) {
+		t.Errorf("expected a server-side timestamp within the test window, got %s",
+			broadcastMsg.Timestamp)
 	}
 }
 

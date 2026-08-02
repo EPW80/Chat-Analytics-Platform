@@ -56,9 +56,10 @@ The platform provides real-time room-based chat with live analytics: message thr
 - **Per-connection rate limiting** — token-bucket throttle on inbound messages.
 - **Token auth** — optional HMAC-signed bearer tokens (enabled when `AUTH_SECRET` is set); falls back to a `userId` query param for local development.
 - **Configurable CORS / WebSocket origin allowlist.**
-- **Graceful degradation** — runs without DynamoDB (chat + live analytics still work, no persistence).
+- **Graceful degradation** — runs without DynamoDB (chat + live analytics still work, no persistence). Table init distinguishes an absent table from an unreachable one, so a throttle or transport blip is reported rather than silently retried as a create, and startup waits for the table to become `ACTIVE` before accepting writes.
 - **Voice Ops Briefings** — an anomaly detector watches the live metrics and narrates traffic events aloud in a control-room register via ElevenLabs TTS. Off by default; see below.
 - **Polished React frontend** — refined dark theme, design tokens, reusable UI primitives, avatars, virtualized message list, and a live metrics dashboard.
+- **Clean shutdown** — the hub's register/unregister/broadcast sends are guarded by its `done` channel, so once the event loop stops, callers return immediately instead of blocking on a channel nothing drains. Without this, every connection's read pump leaks on its deferred unregister.
 - **Comprehensive tests** — every backend package has a `_test.go`; the suite runs clean under `-race`.
 
 ## Quick Start
@@ -165,7 +166,9 @@ Recent message history for a room or a user. Optional `?limit=` (default 50, max
   "timestamp": "2026-06-16T10:30:00Z"
 }
 ```
-**Types:** `chat`, `system`, `join`, `leave`. **Validation:** username required (≤50 chars); chat content required (≤1000 chars); `messageId`/`timestamp`/`roomId` are server-authoritative.
+**Types:** `chat`, `system`, `join`, `leave`. **Validation:** username required (≤50 chars); chat content required (≤1000 chars).
+
+`messageId`, `timestamp`, `roomId`, `userId` and `username` are server-authoritative: the server overwrites all five on every inbound frame, regardless of what the client sent. This is load-bearing rather than cosmetic — `messageId` is the DynamoDB sort key and `timestamp` is the GSI sort key, so honouring a client-supplied value would let one connection overwrite another's stored row or pin itself to the head of room history.
 
 ## Voice Ops Briefings
 
@@ -185,6 +188,8 @@ An anomaly detector polls the live metrics every 5 seconds and narrates traffic 
 ```
 
 **Detected conditions:** message-rate spike, p99 latency breach, connection surge, traffic dropout — each in a Yellow or Red severity band, debounced to at most one briefing per kind per 5 minutes.
+
+Rate-based conditions are evaluated against **complete** minutes: the newest slot of the 15-minute window is the minute currently in progress, and comparing that partial count against full-minute baselines reads as a dropout at the top of every minute. The detector ignores it. The cost is granularity — a genuine spike or dropout is visible once its minute closes, so up to ~60s later than the 5s poll interval alone would suggest.
 
 A sample script, as spoken:
 
@@ -284,7 +289,9 @@ npm run build            # tsc type-check + vite build
 npm run lint             # eslint
 ```
 
-> Note: `TestClient_PingPong` has a documented pre-existing race in the test harness — left as-is intentionally.
+> The full suite runs clean under `-race` in a single step, locally and in CI. The
+> historical `TestClient_PingPong` race was fixed by making the test's ping counter
+> an `atomic.Int64`.
 
 ## Deployment
 

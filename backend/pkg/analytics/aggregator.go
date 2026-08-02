@@ -19,12 +19,15 @@ func newWindow() *slidingWindow {
 	return &slidingWindow{lastTick: time.Now().Truncate(time.Minute)}
 }
 
+// increment counts one message into the current minute. The lock is held across
+// both the rotation check and the add: releasing it in between lets a concurrent
+// rotation advance idx and zero the slot after this call has chosen its index,
+// dropping the count into a slot that is immediately cleared.
 func (w *slidingWindow) increment() {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.advanceIfNeeded()
-	idx := w.idx
-	w.mu.Unlock()
-	w.slots[idx].Add(1)
+	w.slots[w.idx].Add(1)
 }
 
 // snapshot returns the counts for the last 15 minutes, oldest first.
