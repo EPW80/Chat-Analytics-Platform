@@ -183,18 +183,14 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// Set client metadata (server overrides any client-supplied values)
+		// Server owns every identity and ordering field. MessageID is the DynamoDB sort
+		// key and Timestamp is the GSI sort key, so a client-supplied value would let one
+		// connection overwrite another's row or pin itself to the head of room history.
 		msg.UserID = c.userID
 		msg.Username = c.username
 		msg.RoomID = c.roomID
-
-		// Enrich with server-side fields the client doesn't set
-		if msg.MessageID == "" {
-			msg.MessageID = uuid.New().String()
-		}
-		if msg.Timestamp.IsZero() {
-			msg.Timestamp = time.Now().UTC()
-		}
+		msg.MessageID = uuid.New().String()
+		msg.Timestamp = time.Now().UTC()
 
 		// Validate
 		if err := msg.Validate(); err != nil {
