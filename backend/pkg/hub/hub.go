@@ -153,23 +153,46 @@ func (h *Hub) Run() {
 	}
 }
 
-// Register adds a client to the hub
+// Register adds a client to the hub.
+//
+// The send is guarded by h.done: once Run has returned nothing drains these
+// channels, and an unguarded send would block the caller forever. After
+// shutdown this is a no-op rather than a Close — the shutdown branch in Run has
+// already closed every client it knew about, and Client.Close closes the send
+// channel, so closing a late registrant risks a double close. Its writePump
+// exits on the next failed ping write.
 func (h *Hub) Register(client any) {
-	if c, ok := client.(Client); ok {
-		h.register <- c
+	c, ok := client.(Client)
+	if !ok {
+		return
+	}
+	select {
+	case h.register <- c:
+	case <-h.done:
 	}
 }
 
-// Unregister removes a client from the hub
+// Unregister removes a client from the hub. Guarded by h.done for the reason
+// given on Register: readPump calls this from a defer, so an unguarded send
+// would leak every client goroutine at shutdown.
 func (h *Hub) Unregister(client any) {
-	if c, ok := client.(Client); ok {
-		h.unregister <- c
+	c, ok := client.(Client)
+	if !ok {
+		return
+	}
+	select {
+	case h.unregister <- c:
+	case <-h.done:
 	}
 }
 
 // Broadcast sends a message to all clients in the given room.
+// Guarded by h.done; see Register.
 func (h *Hub) Broadcast(roomID string, message []byte) {
-	h.broadcast <- broadcastRequest{roomID: roomID, data: message}
+	select {
+	case h.broadcast <- broadcastRequest{roomID: roomID, data: message}:
+	case <-h.done:
+	}
 }
 
 // BroadcastAll sends a message to every connected client across all rooms.
