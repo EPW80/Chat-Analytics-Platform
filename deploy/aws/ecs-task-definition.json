@@ -1,0 +1,60 @@
+{
+  "family": "chat-analytics-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::AWS_ACCOUNT_ID:role/chat-analytics-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::AWS_ACCOUNT_ID:role/chat-analytics-ecs-task",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "AWS_ACCOUNT_ID.dkr.ecr.AWS_REGION.amazonaws.com/chat-analytics-backend:IMAGE_TAG",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "name": "http",
+          "appProtocol": "http"
+        }
+      ],
+      "environment": [
+        { "name": "PORT", "value": "8080" },
+        { "name": "LOG_LEVEL", "value": "info" },
+        { "name": "DYNAMODB_REGION", "value": "AWS_REGION" },
+        { "name": "ALLOWED_ORIGINS", "value": "FRONTEND_ORIGIN" },
+        { "name": "BRIEFING_ENABLED", "value": "false" },
+        { "name": "BRIEFING_AUDIO_DIR", "value": "/data/briefings" },
+        { "name": "RATE_LIMIT_PER_SEC", "value": "5" },
+        { "name": "RATE_LIMIT_BURST", "value": "10" },
+        { "name": "PERSIST_WORKERS", "value": "4" },
+        { "name": "PERSIST_BATCH_SIZE", "value": "25" },
+        { "name": "PERSIST_QUEUE_SIZE", "value": "1024" }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1"
+        ],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 20
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/chat-analytics-backend",
+          "awslogs-region": "AWS_REGION",
+          "awslogs-stream-prefix": "backend"
+        }
+      }
+    }
+  ]
+}

@@ -301,15 +301,27 @@ npm run lint             # eslint
 
 ## Deployment
 
-Production target: **AWS ECS Fargate** for the backend behind an ALB, **DynamoDB** (on-demand) for persistence, and the static frontend on **S3 + CloudFront**. The DynamoDB table and IAM policies are authored by hand. The backend uses the AWS default credential chain (task IAM role) when `DYNAMODB_ENDPOINT` is empty; `ALLOWED_ORIGINS` must list the public frontend origin and TLS (`wss`) is terminated at the edge.
+Production target: **AWS ECS Fargate** for the backend behind an ALB, **DynamoDB** (on-demand) for persistence, and the static frontend on **S3 + CloudFront**.
+
+Scaffold, ALB/WebSocket notes, and scripts live in [`deploy/aws/`](deploy/aws/README.md):
+
+```bash
+cp deploy/aws/params.example.env deploy/aws/params.env  # fill in
+./deploy/aws/scripts/push-to-ecr.sh
+./deploy/aws/scripts/deploy-aws.sh
+./deploy/aws/scripts/sync-frontend.sh
+./deploy/aws/scripts/validate-deployment.sh
+```
+
+DynamoDB table schemas and IAM policies are **hand-authored** — see [`deploy/aws/HAND_AUTHORED.md`](deploy/aws/HAND_AUTHORED.md). The backend uses the AWS default credential chain (task IAM role) when `DYNAMODB_ENDPOINT` is unset; `ALLOWED_ORIGINS` must list the public frontend origin and TLS (`wss`) is terminated at the ALB.
 
 ## Technology Stack
 
-**Backend:** Go 1.23, gorilla/websocket, aws-sdk-go-v2 (DynamoDB), google/uuid, `slog` structured logging, goroutines + channels.
+**Backend:** Go 1.27, gorilla/websocket, aws-sdk-go-v2 (DynamoDB), google/uuid, `slog` structured logging, goroutines + channels.
 
-**Frontend:** React 18, Vite 5, TypeScript 5, Tailwind CSS 3, react-window (virtualization), lucide-react (icons), Inter (font).
+**Frontend:** React 18, Vite 6, TypeScript 5, Tailwind CSS 3, react-window (virtualization), lucide-react (icons), Inter (font).
 
-**Infrastructure:** Docker + Docker Compose, DynamoDB Local (dev) / AWS DynamoDB (prod).
+**Infrastructure:** Docker + Docker Compose, DynamoDB Local (dev) / AWS DynamoDB (prod), ECS Fargate scaffold under `deploy/aws/`.
 
 ## Security Notes
 

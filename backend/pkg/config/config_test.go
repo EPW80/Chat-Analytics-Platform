@@ -22,7 +22,7 @@ func TestLoad_DefaultValues(t *testing.T) {
 		expected string
 	}{
 		{"Port", cfg.Port, "8080"},
-		{"DynamoDBEndpoint", cfg.DynamoDBEndpoint, "http://localhost:8000"},
+		{"DynamoDBEndpoint", cfg.DynamoDBEndpoint, ""},
 		{"DynamoDBRegion", cfg.DynamoDBRegion, "us-east-1"},
 		{"AWSAccessKey", cfg.AWSAccessKey, "dummy"},
 		{"AWSSecretKey", cfg.AWSSecretKey, "dummy"},
@@ -100,9 +100,9 @@ func TestLoad_PartialEnvironment(t *testing.T) {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "error")
 	}
 
-	// Default values
-	if cfg.DynamoDBEndpoint != "http://localhost:8000" {
-		t.Errorf("DynamoDBEndpoint = %q, want default", cfg.DynamoDBEndpoint)
+	// Default values — empty endpoint means "use AWS", not DynamoDB Local.
+	if cfg.DynamoDBEndpoint != "" {
+		t.Errorf("DynamoDBEndpoint = %q, want empty default", cfg.DynamoDBEndpoint)
 	}
 	if cfg.DynamoDBRegion != "us-east-1" {
 		t.Errorf("DynamoDBRegion = %q, want default", cfg.DynamoDBRegion)
