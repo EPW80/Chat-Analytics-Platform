@@ -87,9 +87,10 @@ func NewServer(logger *slog.Logger, repo storage.MessageRepository, cfg *config.
 	// Persist via a bounded worker pool only when storage is available.
 	if repo != nil {
 		s.persister = persist.New(repo, logger, persist.Config{
-			Workers:   cfg.PersistWorkers,
-			BatchSize: cfg.PersistBatchSize,
-			QueueSize: cfg.PersistQueueSize,
+			Workers:       cfg.PersistWorkers,
+			BatchSize:     cfg.PersistBatchSize,
+			QueueSize:     cfg.PersistQueueSize,
+			FlushInterval: cfg.PersistFlushInterval,
 		})
 	}
 
@@ -206,7 +207,7 @@ func (s *Server) handleRoomMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("failed to fetch room messages",
 			slog.String("roomID", roomID),
-			slog.String("error", err.Error()))
+			slog.Any("err", err))
 		http.Error(w, "failed to fetch messages", http.StatusInternalServerError)
 		return
 	}
@@ -238,7 +239,7 @@ func (s *Server) handleUserMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("failed to fetch user messages",
 			slog.String("userID", userID),
-			slog.String("error", err.Error()))
+			slog.Any("err", err))
 		http.Error(w, "failed to fetch messages", http.StatusInternalServerError)
 		return
 	}
@@ -255,7 +256,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		s.logger.Error("failed to encode response", slog.String("error", err.Error()))
+		s.logger.Error("failed to encode response", slog.Any("err", err))
 	}
 }
 
@@ -293,7 +294,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logger.Error("failed to upgrade connection",
-			slog.String("error", err.Error()))
+			slog.Any("err", err))
 		return
 	}
 
@@ -350,7 +351,7 @@ func (s *Server) authenticate(r *http.Request) (string, bool) {
 	userID, err := s.auth.Verify(token)
 	if err != nil {
 		s.logger.Warn("rejected websocket auth",
-			slog.String("error", err.Error()))
+			slog.Any("err", err))
 		return "", false
 	}
 	return userID, true
@@ -369,7 +370,7 @@ func (s *Server) hydrateHistory(c *client.Client) {
 		s.logger.Error("failed to load room history",
 			slog.String("clientID", c.ID()),
 			slog.String("roomID", c.RoomID()),
-			slog.String("error", err.Error()))
+			slog.Any("err", err))
 		return
 	}
 
@@ -378,7 +379,7 @@ func (s *Server) hydrateHistory(c *client.Client) {
 		if err != nil {
 			s.logger.Error("failed to marshal history message",
 				slog.String("messageID", m.MessageID),
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			continue
 		}
 		c.Send(data)
@@ -464,6 +465,10 @@ func main() {
 		slog.String("dynamodb_region", cfg.DynamoDBRegion),
 		slog.String("log_level", cfg.LogLevel))
 
+	for _, problem := range cfg.Validate() {
+		logger.Warn("configuration warning", slog.String("detail", problem))
+	}
+
 	// Initialize DynamoDB storage (graceful degradation if unavailable).
 	// repo is kept as the interface type and only assigned on success, so a
 	// failed init leaves it as a true nil interface (avoiding the typed-nil
@@ -475,7 +480,7 @@ func main() {
 		db, err := storage.NewDynamoDBRepository(dbCtx, cfg, logger)
 		if err != nil {
 			logger.Warn("DynamoDB unavailable, running without persistence",
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 		} else {
 			repo = db
 		}
@@ -548,7 +553,7 @@ func main() {
 	// Release storage resources
 	if srv.storage != nil {
 		if err := srv.storage.Close(); err != nil {
-			logger.Error("error closing storage", slog.String("error", err.Error()))
+			logger.Error("error closing storage", slog.Any("err", err))
 		}
 	}
 
