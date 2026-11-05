@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Briefing, InboundFrame, Message } from '../types/message';
+import type { Briefing, Message } from '../types/message';
+import { parseInboundFrames } from '../lib/wsFrames';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'failed';
 
@@ -17,7 +18,7 @@ interface UseWebSocketReturn {
 }
 
 const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000];
+const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000] as const;
 
 export function useWebSocket(url: string, options: UseWebSocketOptions = {}): UseWebSocketReturn {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -25,15 +26,24 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
   const wsRef = useRef<WebSocket | null>(null);
   const attemptRef = useRef(0);
   const mountedRef = useRef(true);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Held in a ref so a changing callback identity never tears down the socket.
   const onBriefingRef = useRef(options.onBriefing);
   onBriefingRef.current = options.onBriefing;
 
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
   const connect = useCallback(() => {
     if (!mountedRef.current) return;
     if (!url) return;
 
+    clearReconnectTimer();
     setConnectionStatus('connecting');
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -46,25 +56,9 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
 
     ws.onmessage = (event) => {
       if (!mountedRef.current) return;
-      // writePump can batch multiple JSON objects separated by newlines
-      const lines = (event.data as string).split('\n').filter(Boolean);
-      const parsed: Message[] = [];
-      for (const line of lines) {
-        try {
-          const frame = JSON.parse(line) as InboundFrame;
-          if (frame.type === 'briefing.ready') {
-            onBriefingRef.current?.(frame.briefing);
-          } else if (
-            frame.type === 'chat' ||
-            frame.type === 'system' ||
-            frame.type === 'join' ||
-            frame.type === 'leave'
-          ) {
-            parsed.push(frame);
-          }
-        } catch {
-          // ignore malformed lines
-        }
+      const { messages: parsed, briefings } = parseInboundFrames(event.data as string);
+      for (const briefing of briefings) {
+        onBriefingRef.current?.(briefing);
       }
       if (parsed.length > 0) {
         setMessages((prev) => [...prev, ...parsed].slice(-500)); // keep last 500
@@ -78,7 +72,8 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
       if (attempt < MAX_RECONNECT_ATTEMPTS) {
         setConnectionStatus('connecting');
         attemptRef.current = attempt + 1;
-        setTimeout(connect, RECONNECT_DELAYS[attempt]);
+        const delay = RECONNECT_DELAYS[attempt] ?? RECONNECT_DELAYS[RECONNECT_DELAYS.length - 1];
+        reconnectTimerRef.current = setTimeout(connect, delay);
       } else {
         setConnectionStatus('failed');
       }
@@ -88,7 +83,7 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
       // onclose fires after onerror; reconnect logic is handled there
       setConnectionStatus('disconnected');
     };
-  }, [url]);
+  }, [url, clearReconnectTimer]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -96,9 +91,10 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
     else setConnectionStatus('disconnected');
     return () => {
       mountedRef.current = false;
+      clearReconnectTimer();
       wsRef.current?.close();
     };
-  }, [connect]);
+  }, [connect, clearReconnectTimer, url]);
 
   const sendMessage = useCallback((content: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

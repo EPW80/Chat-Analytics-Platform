@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   dynamodb:
-    image: amazon/dynamodb-local:latest
+    image: amazon/dynamodb-local:2.5.2
     container_name: chat-analytics-dynamodb
     ports:
       - "8000:8000"
@@ -37,14 +35,16 @@ services:
       # every restart re-synthesizes the same briefings and re-bills for them.
       - briefing-audio:/data/briefings
     depends_on:
-      - dynamodb
+      dynamodb:
+        condition: service_started
     networks:
       - chat-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   frontend:
@@ -58,7 +58,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - chat-network
 

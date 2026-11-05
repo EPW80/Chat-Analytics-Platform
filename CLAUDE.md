@@ -5,7 +5,7 @@ Real-time Twitch-style chat analytics. Go WebSocket backend, React/TypeScript fr
 ## Status
 
 - Phase 1 (WebSocket core): COMPLETE
-- Phase 2A (Docker + DynamoDB): IN PROGRESS — table init debugging
+- Phase 2A (Docker + DynamoDB): COMPLETE
 - Phase 2B (Analytics backend): COMPLETE
 - Phase 2C (React frontend): COMPLETE
 - Phase 3 (Voice Ops Briefings): COMPLETE — off by default via `BRIEFING_ENABLED`
@@ -16,7 +16,7 @@ For the voice briefings feature, see `docs/VOICE_BRIEFINGS_PLAN.md` and
 
 ## Stack
 
-- Backend: Go 1.23, gorilla/websocket, aws-sdk-go-v2, slog
+- Backend: Go 1.27, gorilla/websocket, aws-sdk-go-v2, slog
 - Frontend: Vite + React 18 + TypeScript 5, Tailwind, react-window
 - Storage: DynamoDB (local via Docker, production via AWS)
 - Infra: Docker Compose, ECS (future)
@@ -24,11 +24,12 @@ For the voice briefings feature, see `docs/VOICE_BRIEFINGS_PLAN.md` and
 ## Commands
 
 ```bash
-docker-compose up -d          # Start backend + DynamoDB Local
-./scripts/init-tables.sh      # Create DynamoDB tables
+docker compose up -d           # Start backend + DynamoDB Local
+./scripts/init-tables.sh       # Ensure DynamoDB tables exist (idempotent)
 go test ./... -race            # Run all tests with race detection
 go test ./... -cover           # Coverage report
-curl localhost:8080/health     # Health check
+curl localhost:8080/livez      # Liveness
+curl localhost:8080/readyz     # Readiness (503 if storage configured but down)
 ```
 
 ## Project Structure

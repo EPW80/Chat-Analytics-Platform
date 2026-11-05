@@ -78,8 +78,8 @@ docker-compose up -d
 # Create DynamoDB tables (enables persistence + history)
 ./scripts/init-tables.sh
 
-# Health check
-curl http://localhost:8080/health
+# Readiness check
+curl http://localhost:8080/readyz
 # {"status":"ok","clients":0,"storage":"ok"}
 ```
 
@@ -92,7 +92,7 @@ Services:
 
 ### Backend only (local Go)
 
-**Prerequisites:** Go 1.23+.
+**Prerequisites:** Go 1.27+.
 
 ```bash
 cd backend
@@ -116,8 +116,14 @@ The frontend reads `VITE_WS_URL` and `VITE_API_URL` (defaults point at `localhos
 
 ## API
 
-### `GET /health`
-Liveness + readiness. `storage` is `ok`, `unavailable`, or `disabled`.
+### `GET /livez`
+Liveness probe — always `200` while the process is serving HTTP.
+`storage` is reported as `ok`, `unavailable`, or `disabled`.
+
+### `GET /readyz` (and `GET /health`)
+Readiness probe. Returns `503` when persistence is configured but unreachable;
+storage intentionally disabled still reports ready. `/health` mirrors `/readyz`
+for backward compatibility with existing compose/start scripts.
 ```json
 { "status": "ok", "clients": 5, "storage": "ok" }
 ```

@@ -13,6 +13,8 @@ const ROW_HEIGHT = 64;
 
 function Row({ index, style, data }: ListChildComponentProps<Message[]>) {
   const msg = data[index];
+  if (!msg) return null;
+
   const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (msg.type === 'system' || msg.type === 'join' || msg.type === 'leave') {

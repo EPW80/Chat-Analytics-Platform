@@ -21,6 +21,7 @@ type mockRepo struct {
 	byUser    []*message.Message
 	recentErr error
 	userErr   error
+	healthErr error
 
 	lastRoomID   string
 	lastUserID   string
@@ -47,7 +48,7 @@ func (m *mockRepo) GetMessagesByUser(ctx context.Context, userID string, limit i
 
 func (m *mockRepo) HealthCheck(ctx context.Context) error {
 	m.healthCalled = true
-	return nil
+	return m.healthErr
 }
 
 func (m *mockRepo) Close() error { return nil }
@@ -171,6 +172,49 @@ func TestParseLimit(t *testing.T) {
 
 // Voice briefings are an optional dependency: with BRIEFING_ENABLED unset, the
 // same binary must have no service, no detector goroutine, and no routes.
+func TestLivezAlwaysOK(t *testing.T) {
+	repo := &mockRepo{healthErr: errors.New("dynamo down")}
+	srv := testServer(repo)
+
+	rec := httptest.NewRecorder()
+	srv.setupRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("livez expected 200 even when storage is down, got %d", rec.Code)
+	}
+	if !repo.healthCalled {
+		t.Error("livez should still report storage status")
+	}
+}
+
+func TestReadyzFailsWhenStorageUnavailable(t *testing.T) {
+	repo := &mockRepo{healthErr: errors.New("dynamo down")}
+	srv := testServer(repo)
+
+	rec := httptest.NewRecorder()
+	srv.setupRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz expected 503 when storage is down, got %d", rec.Code)
+	}
+
+	var body healthResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Status != "not_ready" || body.Storage != "unavailable" {
+		t.Errorf("unexpected body: %+v", body)
+	}
+}
+
+func TestReadyzOKWhenStorageDisabled(t *testing.T) {
+	srv := testServer(nil)
+
+	rec := httptest.NewRecorder()
+	srv.setupRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readyz expected 200 when storage is disabled, got %d", rec.Code)
+	}
+}
+
 func TestBriefingsDisabledByDefault(t *testing.T) {
 	srv := testServer(nil)
 

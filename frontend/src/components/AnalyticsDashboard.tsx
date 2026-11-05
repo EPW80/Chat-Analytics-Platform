@@ -46,17 +46,25 @@ function MetricCard({
   );
 }
 
-function MiniBar({ count, max }: { count: number; max: number }) {
+function MiniBar({ count, max, minuteIndex }: { count: number; max: number; minuteIndex: number }) {
   const pct = max > 0 ? Math.round((count / max) * 100) : 0;
+  const label = `${count} messages in minute ${minuteIndex + 1}`;
   return (
-    <div className="group flex flex-1 flex-col items-center gap-1" title={`${count} messages`}>
+    <div
+      className="group flex flex-1 flex-col items-center gap-1"
+      title={label}
+      role="img"
+      aria-label={label}
+    >
       <div className="flex w-full items-end" style={{ height: 56 }}>
         <div
           className="w-full rounded-t bg-accent transition-colors group-hover:bg-accent-hover"
           style={{ height: `${pct}%`, minHeight: count > 0 ? 2 : 0 }}
         />
       </div>
-      <span className="text-[10px] text-subtle">{count}</span>
+      <span className="text-[10px] text-subtle" aria-hidden>
+        {count}
+      </span>
     </div>
   );
 }
@@ -104,9 +112,13 @@ export function AnalyticsDashboard({
           <BarChart3 className="h-4 w-4" />
           <p className="text-xs font-medium uppercase tracking-wider">Messages / Minute — last 15 min</p>
         </div>
-        <div className="flex items-end gap-1">
+        <div
+          className="flex items-end gap-1"
+          role="img"
+          aria-label={`Messages per minute over the last ${mpm.length} minutes`}
+        >
           {mpm.map((count, i) => (
-            <MiniBar key={i} count={count} max={maxMpm} />
+            <MiniBar key={i} count={count} max={maxMpm} minuteIndex={i} />
           ))}
         </div>
       </Card>

@@ -2,6 +2,7 @@ package client
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/epw80/chat-analytics-platform/pkg/analytics"
@@ -75,6 +76,9 @@ type Client struct {
 	// Configurable timing (defaults to package constants)
 	pongWait   time.Duration
 	pingPeriod time.Duration
+
+	// Guards close(c.send) so unregister + hub shutdown cannot double-close.
+	closeOnce sync.Once
 
 	// Logger
 	logger *slog.Logger
@@ -288,10 +292,12 @@ func (c *Client) Send(data []byte) {
 	}
 }
 
-// Close closes the client's send channel
-// Implements the hub.Client interface
+// Close closes the client's send channel.
+// Implements the hub.Client interface. Safe to call more than once.
 func (c *Client) Close() {
-	close(c.send)
+	c.closeOnce.Do(func() {
+		close(c.send)
+	})
 }
 
 // ID returns the client's unique identifier

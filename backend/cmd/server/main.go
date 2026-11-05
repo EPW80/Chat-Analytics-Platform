@@ -140,25 +140,50 @@ func (s *Server) originAllowed(r *http.Request) bool {
 	return false
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Storage is an optional dependency; report its reachability so the
-	// endpoint can be used as a readiness probe rather than a bare liveness ping.
-	storageStatus := "disabled"
-	if s.storage != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := s.storage.HealthCheck(ctx); err != nil {
-			storageStatus = "unavailable"
-		} else {
-			storageStatus = "ok"
-		}
+// storageStatus reports DynamoDB reachability: "ok", "unavailable", or "disabled".
+func (s *Server) storageStatus(ctx context.Context) string {
+	if s.storage == nil {
+		return "disabled"
 	}
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := s.storage.HealthCheck(checkCtx); err != nil {
+		return "unavailable"
+	}
+	return "ok"
+}
 
+// handleLivez is a bare liveness probe — the process is up and serving HTTP.
+func (s *Server) handleLivez(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, healthResponse{
 		Status:  "ok",
 		Clients: s.hub.ClientCount(),
+		Storage: s.storageStatus(r.Context()),
+	})
+}
+
+// handleReadyz fails when persistence is configured but unreachable so orchestrators
+// do not route traffic while DynamoDB is down. Storage intentionally disabled still
+// reports ready (chat + live analytics work without it).
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	storageStatus := s.storageStatus(r.Context())
+	statusCode := http.StatusOK
+	status := "ok"
+	if storageStatus == "unavailable" {
+		statusCode = http.StatusServiceUnavailable
+		status = "not_ready"
+	}
+	s.writeJSON(w, statusCode, healthResponse{
+		Status:  status,
+		Clients: s.hub.ClientCount(),
 		Storage: storageStatus,
 	})
+}
+
+// handleHealth keeps the historical endpoint; it mirrors readiness so existing
+// compose/start scripts that curl /health still gate on storage health.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.handleReadyz(w, r)
 }
 
 // handleRoomMessages serves the recent message history for a room.
@@ -396,6 +421,8 @@ func corsMiddleware(allowedOrigins []string, next http.Handler) http.Handler {
 
 func (s *Server) setupRoutes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/livez", s.handleLivez)
+	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/analytics", analytics.NewHandler(s.analytics))
@@ -479,20 +506,20 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Cancel on SIGINT/SIGTERM so shutdown shares one context tree.
+	runCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// Start HTTP server in goroutine
 	go func() {
 		logger.Info("starting server", slog.String("port", cfg.Port))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server error", slog.String("error", err.Error()))
+			logger.Error("server error", slog.Any("err", err))
 			os.Exit(1)
 		}
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
+	<-runCtx.Done()
 	logger.Info("shutting down server...")
 
 	// Graceful shutdown with timeout
@@ -501,7 +528,7 @@ func main() {
 
 	// Shutdown HTTP server
 	if err := httpServer.Shutdown(ctx); err != nil {
-		logger.Error("server forced to shutdown", slog.String("error", err.Error()))
+		logger.Error("server forced to shutdown", slog.Any("err", err))
 	}
 
 	// Stop the detector before the hub, so no briefing is broadcast into a

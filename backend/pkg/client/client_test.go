@@ -691,3 +691,37 @@ func TestClient_RateLimited(t *testing.T) {
 		t.Errorf("expected 2 broadcasts under rate limit, got %d", hub.BroadcastCount())
 	}
 }
+
+func TestClient_CloseIdempotent(t *testing.T) {
+	hub := newMockHub()
+	logger := newTestLogger()
+
+	upgrader := websocket.Upgrader{}
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade error: %v", err)
+		}
+		defer conn.Close()
+
+		client := New(hub, conn, "user123", "alice", logger)
+		client.Close()
+		client.Close() // must not panic
+		close(done)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	defer ws.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Close test")
+	}
+}

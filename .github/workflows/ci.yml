@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.27.3'
           cache-dependency-path: backend/go.sum
 
       # Tests use the Mock Synthesizer, never the network. A live call would
@@ -37,6 +37,11 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -race
 
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   frontend:
     name: Frontend (TypeScript)
     runs-on: ubuntu-latest
@@ -48,10 +53,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci
       - run: npm run lint
+      - run: npm run test
       - run: npm run build
