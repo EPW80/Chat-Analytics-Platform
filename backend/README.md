@@ -42,10 +42,12 @@ go build -o chat-server cmd/server/main.go
 
 ## API Endpoints
 
-### Health Check
+### Health / readiness
 ```
-GET /health
-Response: {"status":"ok","clients":5}
+GET /livez
+GET /readyz
+GET /health   # mirrors /readyz
+Response: {"status":"ok","clients":5,"storage":"ok"}
 ```
 
 ### WebSocket

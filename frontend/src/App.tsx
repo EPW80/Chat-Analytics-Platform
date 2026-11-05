@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Activity, BarChart3, MessageSquare } from 'lucide-react';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { MessageInput } from './components/MessageInput';
@@ -11,17 +11,12 @@ import { Input } from './components/ui/Input';
 import { StatusDot } from './components/ui/StatusDot';
 import { useAnalytics } from './hooks/useAnalytics';
 import { useBriefings } from './hooks/useBriefings';
-import { useWebSocket } from './hooks/useWebSocket';
+import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { cn } from './lib/cn';
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080/ws';
 
-function generateUserId(): string {
-  return 'user-' + Math.random().toString(36).slice(2, 10);
-}
-
 type Tab = 'chat' | 'analytics';
-type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'failed';
 
 const statusTone: Record<ConnectionStatus, 'success' | 'warning' | 'danger'> = {
   connected: 'success',
@@ -38,11 +33,12 @@ const TABS: { id: Tab; label: string; Icon: typeof MessageSquare }[] = [
 export default function App() {
   const [username, setUsername] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [userId] = useState(() => crypto.randomUUID());
   const inputRef = useRef<HTMLInputElement>(null);
+  const tablistRef = useRef<HTMLElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const userId = useMemo(() => generateUserId(), []);
   const wsUrl = confirmed ? `${WS_URL}?userId=${userId}&username=${encodeURIComponent(username)}` : '';
 
   const { briefings, voiceEnabled, toggleVoice, needsGesture, onBriefingFrame, play } = useBriefings();
@@ -50,11 +46,29 @@ export default function App() {
   const { messages, sendMessage, isConnected, connectionStatus } = useWebSocket(wsUrl, {
     onBriefing: onBriefingFrame,
   });
-  const { metrics } = useAnalytics(5000);
 
   const [tab, setTab] = useState<Tab>('chat');
-
+  // Poll faster on the analytics tab; keep a slower cadence on chat so the
+  // sidebar user list stays fresh without hammering /api/analytics.
+  const { metrics } = useAnalytics(tab === 'analytics' ? 5000 : 15_000, { enabled: confirmed });
   const activeUsers = metrics?.activeUserDetails ?? [];
+
+  const onTabKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    const idx = TABS.findIndex((t) => t.id === tab);
+    if (idx < 0) return;
+    let next = idx;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % TABS.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + TABS.length) % TABS.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = TABS.length - 1;
+    else return;
+    e.preventDefault();
+    const nextTab = TABS[next];
+    if (!nextTab) return;
+    setTab(nextTab.id);
+    const buttons = tablistRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    buttons?.[next]?.focus();
+  };
 
   if (!confirmed) {
     return (
@@ -70,12 +84,17 @@ export default function App() {
             </div>
           </div>
           <div className="space-y-3">
+            <label className="block text-left text-sm font-medium text-muted" htmlFor="display-name">
+              Display name
+            </label>
             <Input
+              id="display-name"
               ref={inputRef}
               type="text"
               maxLength={50}
               placeholder="Your name…"
               value={username}
+              aria-label="Display name"
               onChange={(e) => setUsername(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && username.trim()) setConfirmed(true); }}
             />
@@ -103,22 +122,38 @@ export default function App() {
         </div>
         <span className="hidden text-sm text-subtle sm:inline">@{username}</span>
 
-        <Badge tone={statusTone[connectionStatus]} className="ml-auto capitalize">
+        <Badge
+          tone={statusTone[connectionStatus]}
+          className="ml-auto capitalize"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <StatusDot tone={statusTone[connectionStatus]} pulse={connectionStatus === 'connecting'} />
           {connectionStatus}
         </Badge>
 
-        <nav className="flex gap-1 rounded-lg bg-surface-raised p-1">
+        <nav
+          ref={tablistRef}
+          role="tablist"
+          aria-label="Main views"
+          className="flex gap-1 rounded-lg bg-surface-raised p-1"
+          onKeyDown={onTabKeyDown}
+        >
           {TABS.map(({ id, label, Icon }) => (
             <button
               key={id}
+              role="tab"
+              id={`tab-${id}`}
+              aria-selected={tab === id}
+              aria-controls={`panel-${id}`}
+              tabIndex={tab === id ? 0 : -1}
               onClick={() => setTab(id)}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                 tab === id ? 'bg-accent text-accent-fg' : 'text-muted hover:text-text',
               )}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-4 w-4" aria-hidden />
               <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
@@ -126,7 +161,12 @@ export default function App() {
       </header>
 
       {tab === 'chat' && (
-        <div className="flex flex-1 overflow-hidden">
+        <div
+          id="panel-chat"
+          role="tabpanel"
+          aria-labelledby="tab-chat"
+          className="flex flex-1 overflow-hidden"
+        >
           <div className="flex flex-1 flex-col overflow-hidden">
             <MessageList messages={messages} />
             <MessageInput onSend={sendMessage} disabled={!isConnected} />
@@ -136,7 +176,12 @@ export default function App() {
       )}
 
       {tab === 'analytics' && (
-        <div className="flex flex-1 overflow-hidden">
+        <div
+          id="panel-analytics"
+          role="tabpanel"
+          aria-labelledby="tab-analytics"
+          className="flex flex-1 overflow-hidden"
+        >
           <AnalyticsDashboard
             metrics={metrics}
             briefings={briefings}

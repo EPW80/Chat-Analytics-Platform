@@ -39,13 +39,16 @@ export function MessageInput({ onSend, disabled }: Props) {
           placeholder={disabled ? 'Connecting…' : 'Type a message (Enter to send, Shift+Enter for newline)'}
           value={value}
           disabled={disabled}
+          aria-label="Chat message"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
         />
         <div className="flex flex-col items-end gap-1.5">
-          <Badge tone={remaining < 50 ? 'danger' : 'neutral'}>{remaining}</Badge>
-          <Button onClick={submit} disabled={disabled || !value.trim()}>
-            <Send className="h-4 w-4" />
+          <Badge tone={remaining < 50 ? 'danger' : 'neutral'} aria-label={`${remaining} characters remaining`}>
+            {remaining}
+          </Badge>
+          <Button onClick={submit} disabled={disabled || !value.trim()} aria-label="Send message">
+            <Send className="h-4 w-4" aria-hidden />
             <span className="hidden sm:inline">Send</span>
           </Button>
         </div>

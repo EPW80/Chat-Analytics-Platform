@@ -1,6 +1,8 @@
 module github.com/epw80/chat-analytics-platform
 
-go 1.23
+go 1.27
+
+toolchain go1.27.3
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.0

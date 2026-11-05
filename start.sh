@@ -51,22 +51,24 @@ echo ""
 echo "Step 2: Waiting for backend to be healthy..."
 attempt=0
 max_attempts=30
-until curl -sf http://localhost:8080/health > /dev/null 2>&1; do
+until curl -sf http://localhost:8080/readyz > /dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ $attempt -ge $max_attempts ]; then
-    echo "ERROR: Backend did not become healthy in time."
+    echo "ERROR: Backend did not become ready in time."
     echo "Run '$COMPOSE logs backend' to inspect."
     exit 1
   fi
   echo "  Attempt $attempt/$max_attempts..."
   sleep 3
 done
-echo "  Backend is healthy!"
+echo "  Backend is ready!"
 
-# Initialize DynamoDB tables
+# Ensure DynamoDB tables exist (idempotent — never deletes data).
+# The server also calls EnsureTable on boot; this step is a belt-and-suspenders
+# check useful when you want explicit confirmation after compose is up.
 if [ "$SKIP_INIT" = false ]; then
   echo ""
-  echo "Step 3: Initializing DynamoDB tables..."
+  echo "Step 3: Ensuring DynamoDB tables exist..."
   "$SCRIPT_DIR/scripts/init-tables.sh"
 else
   echo ""
@@ -77,7 +79,8 @@ echo ""
 echo "==================================="
 echo "Platform is running!"
 echo "==================================="
-echo "  Backend health:  http://localhost:8080/health"
+echo "  Liveness:        http://localhost:8080/livez"
+echo "  Readiness:       http://localhost:8080/readyz"
 echo "  WebSocket:       ws://localhost:8080/ws"
 echo "  DynamoDB Local:  http://localhost:8000"
 echo ""
