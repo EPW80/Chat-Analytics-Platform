@@ -22,7 +22,7 @@ type Runner struct {
 	metrics   MetricsSource
 	detector  *analytics.Detector
 	svc       *Service
-	broadcast func([]byte) // wired to hub.BroadcastAll (see docs/wiring.md)
+	broadcast func([]byte) // wired to hub.BroadcastAll
 	interval  time.Duration
 	log       *slog.Logger
 	done      chan struct{}
@@ -68,13 +68,13 @@ func (r *Runner) handle(a analytics.Anomaly) {
 
 	rec, err := r.svc.Handle(ctx, a)
 	if err != nil {
-		r.log.Error("briefing: handle failed", "error", err, "kind", a.Kind, "scope", a.Scope)
+		r.log.Error("briefing: handle failed", slog.Any("err", err), "kind", a.Kind, "scope", a.Scope)
 		return
 	}
 
 	frame, err := marshalFrame(rec)
 	if err != nil {
-		r.log.Error("briefing: marshal frame failed", "error", err, "hash", rec.Hash)
+		r.log.Error("briefing: marshal frame failed", slog.Any("err", err), "hash", rec.Hash)
 		return
 	}
 
