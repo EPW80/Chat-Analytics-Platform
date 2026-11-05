@@ -96,7 +96,7 @@ func (r *DynamoDBRepository) SaveMessage(ctx context.Context, msg *message.Messa
 	item, err := attributevalue.MarshalMap(msg)
 	if err != nil {
 		r.logger.Error("failed to marshal message",
-			slog.String("error", err.Error()),
+			slog.Any("err", err),
 			slog.String("messageId", msg.MessageID))
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
@@ -110,7 +110,7 @@ func (r *DynamoDBRepository) SaveMessage(ctx context.Context, msg *message.Messa
 	_, err = r.client.PutItem(ctx, input)
 	if err != nil {
 		r.logger.Error("failed to save message to DynamoDB",
-			slog.String("error", err.Error()),
+			slog.Any("err", err),
 			slog.String("messageId", msg.MessageID))
 		return fmt.Errorf("failed to save message: %w", err)
 	}
@@ -168,7 +168,7 @@ func (r *DynamoDBRepository) writeBatch(ctx context.Context, msgs []*message.Mes
 		if err != nil {
 			r.logger.Error("batch write failed",
 				slog.Int("items", len(unprocessed[TableName])),
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			return fmt.Errorf("batch write failed: %w", err)
 		}
 		unprocessed = out.UnprocessedItems
@@ -204,7 +204,7 @@ func (r *DynamoDBRepository) GetRecentMessages(ctx context.Context, roomID strin
 	result, err := r.client.Query(ctx, input)
 	if err != nil {
 		r.logger.Error("failed to query messages",
-			slog.String("error", err.Error()),
+			slog.Any("err", err),
 			slog.String("roomId", roomID))
 		return nil, fmt.Errorf("failed to query messages: %w", err)
 	}
@@ -215,7 +215,7 @@ func (r *DynamoDBRepository) GetRecentMessages(ctx context.Context, roomID strin
 		var msg message.Message
 		if err := attributevalue.UnmarshalMap(item, &msg); err != nil {
 			r.logger.Error("failed to unmarshal message",
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			continue
 		}
 		messages = append(messages, &msg)
@@ -253,7 +253,7 @@ func (r *DynamoDBRepository) GetMessagesByUser(ctx context.Context, userID strin
 	result, err := r.client.Query(ctx, input)
 	if err != nil {
 		r.logger.Error("failed to query user messages",
-			slog.String("error", err.Error()),
+			slog.Any("err", err),
 			slog.String("userId", userID))
 		return nil, fmt.Errorf("failed to query user messages: %w", err)
 	}
@@ -264,7 +264,7 @@ func (r *DynamoDBRepository) GetMessagesByUser(ctx context.Context, userID strin
 		var msg message.Message
 		if err := attributevalue.UnmarshalMap(item, &msg); err != nil {
 			r.logger.Error("failed to unmarshal message",
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			continue
 		}
 		messages = append(messages, &msg)

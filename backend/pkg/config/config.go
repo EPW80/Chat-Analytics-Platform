@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds all configuration for the application
@@ -29,9 +32,10 @@ type Config struct {
 	RateLimitBurst  float64
 
 	// Persistence worker pool tuning.
-	PersistWorkers   int
-	PersistBatchSize int
-	PersistQueueSize int
+	PersistWorkers       int
+	PersistBatchSize     int
+	PersistQueueSize     int
+	PersistFlushInterval time.Duration
 
 	// Voice briefings. BriefingEnabled gates the whole feature: when false the
 	// detector goroutine, briefing service and routes are never constructed.
@@ -67,9 +71,10 @@ func Load() *Config {
 		RateLimitPerSec: getEnvFloat("RATE_LIMIT_PER_SEC", 5),
 		RateLimitBurst:  getEnvFloat("RATE_LIMIT_BURST", 10),
 
-		PersistWorkers:   getEnvInt("PERSIST_WORKERS", 4),
-		PersistBatchSize: getEnvInt("PERSIST_BATCH_SIZE", 25),
-		PersistQueueSize: getEnvInt("PERSIST_QUEUE_SIZE", 1024),
+		PersistWorkers:       getEnvInt("PERSIST_WORKERS", 4),
+		PersistBatchSize:     getEnvInt("PERSIST_BATCH_SIZE", 25),
+		PersistQueueSize:     getEnvInt("PERSIST_QUEUE_SIZE", 1024),
+		PersistFlushInterval: getEnvDuration("PERSIST_FLUSH_INTERVAL", 500*time.Millisecond),
 
 		BriefingEnabled:    getEnvBool("BRIEFING_ENABLED", false),
 		ElevenLabsKey:      getEnv("ELEVENLABS_API_KEY", ""),
@@ -78,6 +83,21 @@ func Load() *Config {
 		BriefingAudioDir:   getEnv("BRIEFING_AUDIO_DIR", "/data/briefings"),
 		BriefingCharBudget: getEnvInt("BRIEFING_MONTHLY_CHAR_BUDGET", 10000),
 	}
+}
+
+// Validate reports configuration problems that should be fixed before relying
+// on optional features. It does not fail closed — callers decide severity.
+func (c *Config) Validate() []string {
+	var problems []string
+	if c.BriefingEnabled {
+		if c.ElevenLabsKey == "" {
+			problems = append(problems, "BRIEFING_ENABLED=true but ELEVENLABS_API_KEY is empty")
+		}
+		if c.ElevenLabsVoice == "" {
+			problems = append(problems, "BRIEFING_ENABLED=true but ELEVENLABS_VOICE_ID is empty")
+		}
+	}
+	return problems
 }
 
 // getEnv reads an environment variable with a fallback default value
@@ -89,23 +109,33 @@ func getEnv(key, defaultValue string) string {
 }
 
 // getEnvInt reads an integer environment variable, falling back on absence or
-// a parse error.
+// a parse error (with a warning so bad values are visible).
 func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if n, err := strconv.Atoi(value); err == nil {
 			return n
 		}
+		slog.Default().Warn("invalid int env; using default",
+			slog.String("key", key),
+			slog.String("value", value),
+			slog.Int("default", defaultValue),
+		)
 	}
 	return defaultValue
 }
 
 // getEnvFloat reads a float environment variable, falling back on absence or a
-// parse error.
+// parse error (with a warning so bad values are visible).
 func getEnvFloat(key string, defaultValue float64) float64 {
 	if value := os.Getenv(key); value != "" {
 		if f, err := strconv.ParseFloat(value, 64); err == nil {
 			return f
 		}
+		slog.Default().Warn("invalid float env; using default",
+			slog.String("key", key),
+			slog.String("value", value),
+			slog.Float64("default", defaultValue),
+		)
 	}
 	return defaultValue
 }
@@ -118,6 +148,26 @@ func getEnvBool(key string, defaultValue bool) bool {
 		if b, err := strconv.ParseBool(strings.TrimSpace(value)); err == nil {
 			return b
 		}
+		slog.Default().Warn("invalid bool env; using default",
+			slog.String("key", key),
+			slog.String("value", value),
+			slog.Bool("default", defaultValue),
+		)
+	}
+	return defaultValue
+}
+
+// getEnvDuration reads a time.Duration environment variable (e.g. "500ms", "1s").
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if d, err := time.ParseDuration(value); err == nil {
+			return d
+		}
+		slog.Default().Warn("invalid duration env; using default",
+			slog.String("key", key),
+			slog.String("value", value),
+			slog.String("default", defaultValue.String()),
+		)
 	}
 	return defaultValue
 }
@@ -140,4 +190,12 @@ func getEnvCSV(key string, defaultValue []string) []string {
 		return defaultValue
 	}
 	return out
+}
+
+// FormatValidate joins Validate problems for logging.
+func FormatValidate(problems []string) string {
+	if len(problems) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d config warning(s): %s", len(problems), strings.Join(problems, "; "))
 }
