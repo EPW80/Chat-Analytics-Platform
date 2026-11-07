@@ -103,8 +103,9 @@ func TestLoad_PartialEnvironment(t *testing.T) {
 	if cfg.LogLevel != "error" {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "error")
 	}
-	if cfg.DynamoDBEndpoint != "http://localhost:8000" {
-		t.Errorf("DynamoDBEndpoint = %q, want default", cfg.DynamoDBEndpoint)
+	// Empty endpoint means "use AWS", not DynamoDB Local.
+	if cfg.DynamoDBEndpoint != "" {
+		t.Errorf("DynamoDBEndpoint = %q, want empty default", cfg.DynamoDBEndpoint)
 	}
 	if cfg.DynamoDBRegion != "us-east-1" {
 		t.Errorf("DynamoDBRegion = %q, want default", cfg.DynamoDBRegion)
