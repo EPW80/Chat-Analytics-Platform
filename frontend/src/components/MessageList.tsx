@@ -1,8 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { MessagesSquare } from 'lucide-react';
-import { FixedSizeList, type ListChildComponentProps } from 'react-window';
+import { List, useListRef, type RowComponentProps } from 'react-window';
 import type { Message } from '../types/message';
-import { useElementSize } from '../hooks/useElementSize';
 import { initials, userColor } from '../lib/userColor';
 
 interface Props {
@@ -11,15 +10,20 @@ interface Props {
 
 const ROW_HEIGHT = 64;
 
-function Row({ index, style, data }: ListChildComponentProps<Message[]>) {
-  const msg = data[index];
+function Row({
+  index,
+  style,
+  messages,
+  ariaAttributes,
+}: RowComponentProps<{ messages: Message[] }>) {
+  const msg = messages[index];
   if (!msg) return null;
 
   const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (msg.type === 'system' || msg.type === 'join' || msg.type === 'leave') {
     return (
-      <div style={style} className="flex items-center justify-center px-4">
+      <div {...ariaAttributes} style={style} className="flex items-center justify-center px-4">
         <span className="rounded-full bg-surface-raised px-3 py-1 text-xs text-subtle">
           {msg.content || `${msg.username} ${msg.type}ed`}
         </span>
@@ -29,7 +33,11 @@ function Row({ index, style, data }: ListChildComponentProps<Message[]>) {
 
   const color = userColor(msg.userId);
   return (
-    <div style={style} className="flex items-start gap-3 px-4 py-1.5 transition-colors hover:bg-surface-raised">
+    <div
+      {...ariaAttributes}
+      style={style}
+      className="flex items-start gap-3 px-4 py-1.5 transition-colors hover:bg-surface-raised"
+    >
       <div
         className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-bg"
         style={{ backgroundColor: color }}
@@ -49,18 +57,16 @@ function Row({ index, style, data }: ListChildComponentProps<Message[]>) {
 }
 
 export function MessageList({ messages }: Props) {
-  const listRef = useRef<FixedSizeList>(null);
-  const { ref, height } = useElementSize<HTMLDivElement>();
+  const listRef = useListRef(null);
 
   useEffect(() => {
-    if (messages.length > 0) {
-      listRef.current?.scrollToItem(messages.length - 1, 'end');
-    }
-  }, [messages.length]);
+    if (messages.length === 0) return;
+    listRef.current?.scrollToRow({ index: messages.length - 1, align: 'end' });
+  }, [messages.length, listRef]);
 
   if (messages.length === 0) {
     return (
-      <div ref={ref} className="flex flex-1 flex-col items-center justify-center gap-3 text-subtle">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-subtle">
         <MessagesSquare className="h-10 w-10 opacity-40" />
         <p className="text-sm">No messages yet. Say hello!</p>
       </div>
@@ -68,20 +74,14 @@ export function MessageList({ messages }: Props) {
   }
 
   return (
-    <div ref={ref} className="flex-1 overflow-hidden">
-      {height > 0 && (
-        <FixedSizeList
-          ref={listRef}
-          height={height}
-          itemCount={messages.length}
-          itemSize={ROW_HEIGHT}
-          itemData={messages}
-          width="100%"
-          className="scrollbar-thin"
-        >
-          {Row}
-        </FixedSizeList>
-      )}
-    </div>
+    <List
+      listRef={listRef}
+      className="flex-1 scrollbar-thin"
+      style={{ height: '100%' }}
+      rowComponent={Row}
+      rowCount={messages.length}
+      rowHeight={ROW_HEIGHT}
+      rowProps={{ messages }}
+    />
   );
 }
