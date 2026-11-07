@@ -29,8 +29,10 @@ export function useAnalytics(intervalMs = 5000, options: UseAnalyticsOptions = {
       }
     };
 
-    fetch_();
-    const id = setInterval(fetch_, intervalMs);
+    void fetch_();
+    const id = setInterval(() => {
+      void fetch_();
+    }, intervalMs);
     return () => {
       cancelled = true;
       controller.abort();

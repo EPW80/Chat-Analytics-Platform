@@ -79,7 +79,7 @@ func (s *Service) Handle(ctx context.Context, a analytics.Anomaly) (Record, erro
 			"kind", a.Kind, "scope", a.Scope)
 	case err != nil:
 		s.log.Error("briefing: synthesis failed, emitting text-only briefing",
-			"error", err, "kind", a.Kind, "scope", a.Scope)
+			slog.Any("err", err), "kind", a.Kind, "scope", a.Scope)
 	default:
 		rec.Hash = audio.Hash
 		rec.AudioURL = audioURLFor(audio.Hash)
