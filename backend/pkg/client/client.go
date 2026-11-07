@@ -166,7 +166,7 @@ func (c *Client) readPump() {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				c.logger.Error("websocket read error",
 					slog.String("clientID", c.id),
-					slog.String("error", err.Error()))
+					slog.Any("err", err))
 			}
 			break
 		}
@@ -183,7 +183,7 @@ func (c *Client) readPump() {
 		if err != nil {
 			c.logger.Warn("invalid message format",
 				slog.String("clientID", c.id),
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			continue
 		}
 
@@ -200,7 +200,7 @@ func (c *Client) readPump() {
 		if err := msg.Validate(); err != nil {
 			c.logger.Warn("message validation failed",
 				slog.String("clientID", c.id),
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			continue
 		}
 
@@ -218,7 +218,7 @@ func (c *Client) readPump() {
 		if err != nil {
 			c.logger.Error("failed to marshal message",
 				slog.String("clientID", c.id),
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 			continue
 		}
 
