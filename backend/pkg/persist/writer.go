@@ -148,7 +148,7 @@ func (w *Writer) worker() {
 		if err := w.repo.BatchSaveMessages(ctx, batch); err != nil {
 			w.logger.Error("failed to persist message batch",
 				slog.Int("batchSize", len(batch)),
-				slog.String("error", err.Error()))
+				slog.Any("err", err))
 		}
 		cancel()
 		batch = batch[:0]
