@@ -11,6 +11,8 @@ backend/server
 .env
 .env.local
 .env.*.local
+deploy/aws/params.env
+deploy/aws/.rendered-task-definition.json
 
 # IDEs
 .vscode/

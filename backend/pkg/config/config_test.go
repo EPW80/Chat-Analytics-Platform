@@ -25,7 +25,7 @@ func TestLoad_DefaultValues(t *testing.T) {
 		expected string
 	}{
 		{"Port", cfg.Port, "8080"},
-		{"DynamoDBEndpoint", cfg.DynamoDBEndpoint, "http://localhost:8000"},
+		{"DynamoDBEndpoint", cfg.DynamoDBEndpoint, ""},
 		{"DynamoDBRegion", cfg.DynamoDBRegion, "us-east-1"},
 		{"AWSAccessKey", cfg.AWSAccessKey, "dummy"},
 		{"AWSSecretKey", cfg.AWSSecretKey, "dummy"},

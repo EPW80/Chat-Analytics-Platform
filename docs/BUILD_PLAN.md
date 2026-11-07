@@ -516,12 +516,12 @@ Target metrics:
 
 #### Days 6-8: AWS Deployment Preparation
 
-- ⏳ Create backend/Dockerfile.production (multi-stage build)
-- ⏳ Create deploy/aws/ecs-task-definition.json
-- ⏳ Create deploy/aws/buildspec.yml
-- ⏳ Create CloudFormation templates (network, dynamodb, ecs-cluster, alb)
-- ⏳ Create deployment scripts (deploy-aws.sh, push-to-ecr.sh, validate-deployment.sh)
-- ⏳ Create deploy/aws/README.md
+- ✅ Multi-stage `backend/Dockerfile` (non-root runtime)
+- ✅ Create deploy/aws/ecs-task-definition.json
+- ✅ Create deploy/aws/buildspec.yml
+- ⏳ Create CloudFormation templates (network, dynamodb, ecs-cluster, alb) — DynamoDB/IAM hand-authored
+- ✅ Create deployment scripts (deploy-aws.sh, push-to-ecr.sh, sync-frontend.sh, validate-deployment.sh)
+- ✅ Create deploy/aws/README.md (+ ALB/WebSocket notes, HAND_AUTHORED.md)
 
 #### Days 9-11: Testing & Documentation
 

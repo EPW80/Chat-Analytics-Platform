@@ -58,8 +58,10 @@ type Config struct {
 // Load reads configuration from environment variables
 func Load() *Config {
 	return &Config{
-		Port:             getEnv("PORT", "8080"),
-		DynamoDBEndpoint: getEnv("DYNAMODB_ENDPOINT", "http://localhost:8000"),
+		Port: getEnv("PORT", "8080"),
+		// Empty endpoint → AWS DynamoDB via the default credential chain (ECS task role).
+		// Local Compose / .env.example set DYNAMODB_ENDPOINT to DynamoDB Local explicitly.
+		DynamoDBEndpoint: getEnv("DYNAMODB_ENDPOINT", ""),
 		DynamoDBRegion:   getEnv("DYNAMODB_REGION", "us-east-1"),
 		AWSAccessKey:     getEnv("AWS_ACCESS_KEY_ID", "dummy"),
 		AWSSecretKey:     getEnv("AWS_SECRET_ACCESS_KEY", "dummy"),

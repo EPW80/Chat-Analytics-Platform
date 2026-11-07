@@ -19,7 +19,7 @@ For the voice briefings feature, see `docs/VOICE_BRIEFINGS_PLAN.md` and
 - Backend: Go 1.27, gorilla/websocket, aws-sdk-go-v2, slog
 - Frontend: Vite + React 18 + TypeScript 5, Tailwind, react-window
 - Storage: DynamoDB (local via Docker, production via AWS)
-- Infra: Docker Compose, ECS (future)
+- Infra: Docker Compose; AWS ECS Fargate scaffold in `deploy/aws/`
 
 ## Commands
 
