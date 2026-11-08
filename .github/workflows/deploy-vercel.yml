@@ -1,0 +1,195 @@
+# Deploy the Vite frontend to Vercel from GitHub Actions.
+#
+# Native Vercel Git integration already deploys this repo. This workflow is the
+# CI-gated alternative: tests run first, then a prebuilt artifact is uploaded.
+#
+# Setup (one-time):
+#   1. Create a Vercel token: https://vercel.com/account/tokens
+#   2. Add GitHub Actions secrets on this repo:
+#        VERCEL_TOKEN       — the token from step 1
+#        VERCEL_ORG_ID      — team_41PVU6m02jtpyMuN9iq6Grpg
+#        VERCEL_PROJECT_ID  — prj_AbkqVRavr2ujsg1Lm6hvO6wnXHrN
+#   3. To avoid double deploys, set in frontend/vercel.json:
+#        "git": { "deploymentEnabled": false }
+#
+# Until those secrets exist, this workflow no-ops so the Git integration remains
+# the active pipeline.
+
+name: Deploy Frontend (Vercel)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-vercel.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-vercel.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        type: choice
+        options:
+          - preview
+          - production
+        default: preview
+
+concurrency:
+  group: vercel-frontend-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  # Pin the CLI so CI does not float onto a breaking major.
+  VERCEL_CLI_VERSION: 41.7.8
+
+jobs:
+  # Skip quietly when secrets are missing so forks / fresh clones stay green.
+  configure:
+    name: Check secrets
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+      production: ${{ steps.check.outputs.production }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+          HAS_ORG: ${{ secrets.VERCEL_ORG_ID != '' }}
+          HAS_PROJECT: ${{ secrets.VERCEL_PROJECT_ID != '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENV: ${{ github.event.inputs.environment || '' }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ] || [ "$HAS_ORG" != "true" ] || [ "$HAS_PROJECT" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets are not set; skipping Actions deploy (Git integration still deploys)."
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$INPUT_ENV" = "production" ]; then
+              echo "production=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "production=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "$EVENT_NAME" = "push" ] && [ "$REF" = "refs/heads/main" ]; then
+            echo "production=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "production=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    name: Frontend checks
+    needs: configure
+    if: needs.configure.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  deploy:
+    name: Deploy to Vercel
+    needs: [configure, test]
+    if: needs.configure.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@${{ env.VERCEL_CLI_VERSION }}
+
+      - name: Pull Vercel environment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ "${{ needs.configure.outputs.production }}" = "true" ]; then
+            vercel pull --yes --environment=production
+          else
+            vercel pull --yes --environment=preview
+          fi
+
+      - name: Build
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ "${{ needs.configure.outputs.production }}" = "true" ]; then
+            vercel build --prod
+          else
+            vercel build
+          fi
+
+      - name: Deploy
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ "${{ needs.configure.outputs.production }}" = "true" ]; then
+            url=$(vercel deploy --prebuilt --prod --yes)
+          else
+            url=$(vercel deploy --prebuilt --yes)
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.url }}';
+            if (!url) return;
+            const body = `Preview deployment: ${url}`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) =>
+              c.user?.type === 'Bot' && c.body?.startsWith('Preview deployment:')
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
