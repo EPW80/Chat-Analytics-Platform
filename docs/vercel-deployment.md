@@ -20,8 +20,8 @@ Project settings (dashboard):
 - **Root Directory:** `frontend`
 - **Framework:** Vite
 - **Node.js:** 22.x
-- **Ignored Build Step:** skip when `frontend/` is unchanged  
-  (`git diff --quiet HEAD^ HEAD -- ./frontend/`)
+- **Ignored Build Step:** skip when files under the frontend root are unchanged  
+  (`git diff --quiet HEAD^ HEAD -- .` — runs inside Root Directory `frontend`)
 - **Env vars:** `VITE_API_URL`, `VITE_WS_URL` (build-time; see dashboard)
 
 Backend Go changes alone do not rebuild the frontend.
