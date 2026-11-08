@@ -22,15 +22,23 @@ const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000] as const;
 
 export function useWebSocket(url: string, options: UseWebSocketOptions = {}): UseWebSocketReturn {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  const [connection, setConnection] = useState<{ url: string; status: ConnectionStatus }>(() => ({
+    url,
+    status: url ? 'connecting' : 'disconnected',
+  }));
+  const connectionStatus =
+    connection.url === url ? connection.status : url ? 'connecting' : 'disconnected';
   const wsRef = useRef<WebSocket | null>(null);
   const attemptRef = useRef(0);
   const mountedRef = useRef(true);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectRef = useRef<() => void>(() => {});
 
   // Held in a ref so a changing callback identity never tears down the socket.
   const onBriefingRef = useRef(options.onBriefing);
-  onBriefingRef.current = options.onBriefing;
+  useEffect(() => {
+    onBriefingRef.current = options.onBriefing;
+  }, [options.onBriefing]);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -39,23 +47,27 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
     }
   }, []);
 
+  const updateConnectionStatus = useCallback(
+    (status: ConnectionStatus) => setConnection({ url, status }),
+    [url],
+  );
+
   const connect = useCallback(() => {
     if (!mountedRef.current) return;
     if (!url) return;
 
     clearReconnectTimer();
-    setConnectionStatus('connecting');
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || wsRef.current !== ws) return;
       attemptRef.current = 0;
-      setConnectionStatus('connected');
+      updateConnectionStatus('connected');
     };
 
     ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || wsRef.current !== ws) return;
       const { messages: parsed, briefings } = parseInboundFrames(event.data as string);
       for (const briefing of briefings) {
         onBriefingRef.current?.(briefing);
@@ -66,33 +78,36 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
     };
 
     ws.onclose = () => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || wsRef.current !== ws) return;
       wsRef.current = null;
       const attempt = attemptRef.current;
       if (attempt < MAX_RECONNECT_ATTEMPTS) {
-        setConnectionStatus('connecting');
+        updateConnectionStatus('connecting');
         attemptRef.current = attempt + 1;
         const delay = RECONNECT_DELAYS[attempt] ?? RECONNECT_DELAYS[RECONNECT_DELAYS.length - 1];
-        reconnectTimerRef.current = setTimeout(connect, delay);
+        reconnectTimerRef.current = setTimeout(() => connectRef.current(), delay);
       } else {
-        setConnectionStatus('failed');
+        updateConnectionStatus('failed');
       }
     };
 
     ws.onerror = () => {
+      if (!mountedRef.current || wsRef.current !== ws) return;
       // onclose fires after onerror; reconnect logic is handled there
-      setConnectionStatus('disconnected');
+      updateConnectionStatus('disconnected');
     };
-  }, [url, clearReconnectTimer]);
+  }, [url, clearReconnectTimer, updateConnectionStatus]);
 
   useEffect(() => {
     mountedRef.current = true;
+    connectRef.current = connect;
     if (url) connect();
-    else setConnectionStatus('disconnected');
     return () => {
       mountedRef.current = false;
       clearReconnectTimer();
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      ws?.close();
     };
   }, [connect, clearReconnectTimer, url]);
 
@@ -102,10 +117,12 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}): Us
     }
   }, []);
 
+  const currentConnectionStatus = url ? connectionStatus : 'disconnected';
+
   return {
     messages,
     sendMessage,
-    isConnected: connectionStatus === 'connected',
-    connectionStatus,
+    isConnected: currentConnectionStatus === 'connected',
+    connectionStatus: currentConnectionStatus,
   };
 }
