@@ -20,4 +20,10 @@ npm run build
 | `VITE_WS_URL`  | `ws://localhost:8080/ws`    | WebSocket endpoint   |
 | `VITE_API_URL` | `http://localhost:8080`     | REST API base URL    |
 
-Values are baked in at build time for production images.
+Values are baked in at build time (Docker image or Vercel build).
+
+## Deploy (Vercel)
+
+GitHub → Vercel is wired for this app (`rootDirectory: frontend`). See
+[`docs/vercel-deployment.md`](../docs/vercel-deployment.md) for the pipeline,
+preview/production behavior, and the optional Actions-based deploy workflow.
