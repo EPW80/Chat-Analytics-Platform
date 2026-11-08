@@ -36,7 +36,9 @@ export function useBriefings(): UseBriefingsReturn {
   // Read through a ref: onBriefingFrame is handed to useWebSocket once, and a
   // dependency on voiceEnabled would leave it holding a stale value.
   const voiceEnabledRef = useRef(voiceEnabled);
-  voiceEnabledRef.current = voiceEnabled;
+  useEffect(() => {
+    voiceEnabledRef.current = voiceEnabled;
+  }, [voiceEnabled]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
